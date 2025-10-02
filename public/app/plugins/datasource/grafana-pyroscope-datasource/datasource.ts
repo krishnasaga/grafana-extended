@@ -1,12 +1,16 @@
-import Prism, { Grammar } from 'prismjs';
-import { Observable, of } from 'rxjs';
+import Prism from 'prismjs';
+import { map, Observable, of } from 'rxjs';
 
 import {
   AbstractQuery,
+  AdHocVariableFilter,
   CoreApp,
   DataQueryRequest,
   DataQueryResponse,
+  DataSourceGetTagKeysOptions,
+  DataSourceGetTagValuesOptions,
   DataSourceInstanceSettings,
+  MetricFindValue,
   ScopedVars,
 } from '@grafana/data';
 import { DataSourceWithBackend, getTemplateSrv, TemplateSrv } from '@grafana/runtime';
@@ -14,7 +18,13 @@ import { DataSourceWithBackend, getTemplateSrv, TemplateSrv } from '@grafana/run
 import { VariableSupport } from './VariableSupport';
 import { defaultGrafanaPyroscopeDataQuery, defaultPyroscopeQueryType } from './dataquery.gen';
 import { PyroscopeDataSourceOptions, Query, ProfileTypeMessage } from './types';
-import { extractLabelMatchers, toPromLikeExpr } from './utils';
+import {
+  addLabelToQuery,
+  extractLabelMatchers,
+  grammar,
+  toPromLikeExpr,
+  enrichDataFrameWithAssistantContentMapper,
+} from './utils';
 
 export class PyroscopeDataSource extends DataSourceWithBackend<Query, PyroscopeDataSourceOptions> {
   constructor(
@@ -41,10 +51,12 @@ export class PyroscopeDataSource extends DataSourceWithBackend<Query, PyroscopeD
     if (!validTargets.length) {
       return of({ data: [] });
     }
-    return super.query({
-      ...request,
-      targets: validTargets,
-    });
+    return super
+      .query({
+        ...request,
+        targets: validTargets,
+      })
+      .pipe(map(enrichDataFrameWithAssistantContentMapper(request, this.name)));
   }
 
   async getProfileTypes(start: number, end: number): Promise<ProfileTypeMessage[]> {
@@ -71,10 +83,37 @@ export class PyroscopeDataSource extends DataSourceWithBackend<Query, PyroscopeD
     });
   }
 
-  applyTemplateVariables(query: Query, scopedVars: ScopedVars): Query {
+  // By implementing getTagKeys and getTagValues we add ad-hoc filters functionality
+  async getTagKeys(options: DataSourceGetTagKeysOptions<Query>): Promise<MetricFindValue[]> {
+    const data = this.adhocFilterData(options);
+    const labels = await this.getLabelNames(data.query, data.from, data.to);
+    return labels.map((label) => ({ text: label }));
+  }
+
+  // By implementing getTagKeys and getTagValues we add ad-hoc filters functionality
+  async getTagValues(options: DataSourceGetTagValuesOptions<Query>): Promise<MetricFindValue[]> {
+    const data = this.adhocFilterData(options);
+    const labels = await this.getLabelValues(data.query, options.key, data.from, data.to);
+    return labels.map((label) => ({ text: label }));
+  }
+
+  private adhocFilterData(options: DataSourceGetTagKeysOptions<Query> | DataSourceGetTagValuesOptions<Query>) {
+    const from = options.timeRange?.from.valueOf() ?? Date.now() - 1000 * 60 * 60 * 24;
+    const to = options.timeRange?.to.valueOf() ?? Date.now();
+    const query = '{' + options.filters.map((f) => `${f.key}${f.operator}"${f.value}"`).join(',') + '}';
+    return { from, to, query };
+  }
+
+  applyTemplateVariables(query: Query, scopedVars: ScopedVars, filters?: AdHocVariableFilter[]): Query {
+    let labelSelector = this.templateSrv.replace(query.labelSelector ?? '', scopedVars);
+    if (filters && labelSelector) {
+      for (const filter of filters) {
+        labelSelector = addLabelToQuery(labelSelector, filter.key, filter.value, filter.operator);
+      }
+    }
     return {
       ...query,
-      labelSelector: this.templateSrv.replace(query.labelSelector ?? '', scopedVars),
+      labelSelector,
       profileTypeId: this.templateSrv.replace(query.profileTypeId ?? '', scopedVars),
     };
   }
@@ -86,7 +125,7 @@ export class PyroscopeDataSource extends DataSourceWithBackend<Query, PyroscopeD
   importFromAbstractQuery(labelBasedQuery: AbstractQuery): Query {
     return {
       refId: labelBasedQuery.refId,
-      labelSelector: toPromLikeExpr(labelBasedQuery),
+      labelSelector: toPromLikeExpr(labelBasedQuery.labelMatchers),
       queryType: 'both',
       profileTypeId: '',
       groupBy: [],
@@ -128,27 +167,3 @@ export function normalizeQuery(query: Query, app?: CoreApp | string) {
   }
   return normalized;
 }
-
-const grammar: Grammar = {
-  'context-labels': {
-    pattern: /\{[^}]*(?=}?)/,
-    greedy: true,
-    inside: {
-      comment: {
-        pattern: /#.*/,
-      },
-      'label-key': {
-        pattern: /[a-zA-Z_]\w*(?=\s*(=|!=|=~|!~))/,
-        alias: 'attr-name',
-        greedy: true,
-      },
-      'label-value': {
-        pattern: /"(?:\\.|[^\\"])*"/,
-        greedy: true,
-        alias: 'attr-value',
-      },
-      punctuation: /[{]/,
-    },
-  },
-  punctuation: /[{}(),.]/,
-};

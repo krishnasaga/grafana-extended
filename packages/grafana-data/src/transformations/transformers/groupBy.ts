@@ -1,12 +1,16 @@
 import { map } from 'rxjs/operators';
 
-import { guessFieldTypeForField } from '../../dataframe/processDataFrame';
 import { getFieldDisplayName } from '../../field/fieldState';
-import { DataFrame, Field, FieldType, TransformationApplicabilityLevels } from '../../types';
-import { DataTransformerInfo } from '../../types/transformations';
-import { reduceField, ReducerID } from '../fieldReducer';
+import { DataFrame, Field } from '../../types/dataFrame';
+import { DataTransformerInfo, TransformationApplicabilityLevels } from '../../types/transformations';
+import { getFieldTypeForReducer, reduceField, ReducerID } from '../fieldReducer';
+import { getFieldMatcher } from '../matchers';
+import { FieldMatcherID } from '../matchers/ids';
 
 import { DataTransformerID } from './ids';
+import { findMaxFields } from './utils';
+
+const MINIMUM_FIELDS_REQUIRED = 1;
 
 export enum GroupByOperationID {
   aggregate = 'aggregate',
@@ -34,32 +38,19 @@ export const groupByTransformer: DataTransformerInfo<GroupByTransformerOptions> 
     fields: {},
   },
   isApplicable: (data: DataFrame[]) => {
-    let maxFields = 0;
-
     // Group by needs at least two fields
     // a field to group on and a field to aggregate
     // We make sure that at least one frame has at
     // least two fields
-    for (const frame of data) {
-      if (frame.fields.length > maxFields) {
-        maxFields = frame.fields.length;
-      }
-    }
+    const maxFields = findMaxFields(data);
 
-    return maxFields >= 2
+    return maxFields >= MINIMUM_FIELDS_REQUIRED
       ? TransformationApplicabilityLevels.Applicable
       : TransformationApplicabilityLevels.NotApplicable;
   },
   isApplicableDescription: (data: DataFrame[]) => {
-    let maxFields = 0;
-
-    for (const frame of data) {
-      if (frame.fields.length > maxFields) {
-        maxFields = frame.fields.length;
-      }
-    }
-
-    return `The Group by transformation requires a series with at least two fields to work. The maximum number of fields found on a series is ${maxFields}`;
+    const maxFields = findMaxFields(data);
+    return `The Group by transformation requires a series with at least ${MINIMUM_FIELDS_REQUIRED} fields to work. The maximum number of fields found on a series is ${maxFields}`;
   },
   /**
    * Return a modified copy of the series. If the transform is not or should not
@@ -68,20 +59,31 @@ export const groupByTransformer: DataTransformerInfo<GroupByTransformerOptions> 
   operator: (options) => (source) =>
     source.pipe(
       map((data) => {
-        const hasValidConfig = Object.keys(options.fields).find(
-          (name) => options.fields[name].operation === GroupByOperationID.groupBy
-        );
+        const groupByFieldNames: string[] = [];
 
-        if (!hasValidConfig) {
+        for (const [k, v] of Object.entries(options.fields)) {
+          if (v.operation === GroupByOperationID.groupBy) {
+            groupByFieldNames.push(k);
+          }
+        }
+
+        if (groupByFieldNames.length === 0) {
           return data;
         }
+
+        const matcher = getFieldMatcher({
+          id: FieldMatcherID.byNames,
+          options: { names: groupByFieldNames },
+        });
 
         const processed: DataFrame[] = [];
 
         for (const frame of data) {
           // Create a list of fields to group on
           // If there are none we skip the rest
-          const groupByFields: Field[] = frame.fields.filter((field) => shouldGroupOnField(field, options));
+
+          const groupByFields: Field[] = frame.fields.filter((field) => matcher(field, frame, data));
+
           if (groupByFields.length === 0) {
             continue;
           }
@@ -122,16 +124,16 @@ export const groupByTransformer: DataTransformerInfo<GroupByTransformerOptions> 
               const aggregationField: Field = {
                 name: `${fieldName} (${aggregation})`,
                 values: valuesByAggregation[aggregation] ?? [],
-                type: FieldType.other,
+                type: getFieldTypeForReducer(aggregation, field.type),
                 config: {},
               };
 
-              aggregationField.type = detectFieldType(aggregation, field, aggregationField);
               fields.push(aggregationField);
             }
           }
 
           processed.push({
+            refId: frame.refId,
             fields,
             length: valuesByGroupKey.size,
           });
@@ -142,33 +144,21 @@ export const groupByTransformer: DataTransformerInfo<GroupByTransformerOptions> 
     ),
 };
 
-const shouldGroupOnField = (field: Field, options: GroupByTransformerOptions): boolean => {
+// exported for test
+export const shouldCalculateField = (field: Field, options: GroupByTransformerOptions): boolean => {
   const fieldName = getFieldDisplayName(field);
-  return options?.fields[fieldName]?.operation === GroupByOperationID.groupBy;
-};
+  const { operation, aggregations = [] } = options.fields[fieldName] ?? {};
 
-const shouldCalculateField = (field: Field, options: GroupByTransformerOptions): boolean => {
-  const fieldName = getFieldDisplayName(field);
-  return (
-    options?.fields[fieldName]?.operation === GroupByOperationID.aggregate &&
-    Array.isArray(options?.fields[fieldName].aggregations) &&
-    options?.fields[fieldName].aggregations.length > 0
-  );
-};
-
-function detectFieldType(aggregation: string, sourceField: Field, targetField: Field): FieldType {
-  switch (aggregation) {
-    case ReducerID.allIsNull:
-      return FieldType.boolean;
-    case ReducerID.last:
-    case ReducerID.lastNotNull:
-    case ReducerID.first:
-    case ReducerID.firstNotNull:
-      return sourceField.type;
-    default:
-      return guessFieldTypeForField(targetField) ?? FieldType.string;
+  if (!Array.isArray(aggregations)) {
+    return false;
+  } else if (operation === GroupByOperationID.aggregate) {
+    return aggregations.length > 0;
+  } else if (operation === GroupByOperationID.groupBy) {
+    return aggregations.length === 1 && aggregations[0] === ReducerID.count;
+  } else {
+    return false;
   }
-}
+};
 
 /**
  * Groups values together by key. This will create a mapping of strings

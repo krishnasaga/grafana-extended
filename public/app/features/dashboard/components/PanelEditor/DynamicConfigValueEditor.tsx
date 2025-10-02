@@ -1,5 +1,5 @@
 import { css, cx } from '@emotion/css';
-import React, { useId } from 'react';
+import { useId } from 'react';
 import Highlighter from 'react-highlight-words';
 
 import {
@@ -9,7 +9,8 @@ import {
   FieldOverrideContext,
   GrafanaTheme2,
 } from '@grafana/data';
-import { Counter, Field, HorizontalGroup, IconButton, Label, useStyles2 } from '@grafana/ui';
+import { t } from '@grafana/i18n';
+import { Counter, Field, Stack, IconButton, Label, useStyles2 } from '@grafana/ui';
 
 import { OptionsPaneCategory } from './OptionsPaneCategory';
 
@@ -33,6 +34,7 @@ export const DynamicConfigValueEditor = ({
   searchQuery,
 }: DynamicConfigValueEditorProps) => {
   const styles = useStyles2(getStyles);
+
   const item = registry?.getIfExists(property.id);
 
   const componentId = useId();
@@ -54,7 +56,7 @@ export const DynamicConfigValueEditor = ({
   const renderLabel =
     (includeDescription = true, includeCounter = false) =>
     (isExpanded = false) => (
-      <HorizontalGroup justify="space-between">
+      <Stack justifyContent="space-between">
         <Label
           category={labelCategory}
           description={includeDescription ? item.description : undefined}
@@ -71,10 +73,17 @@ export const DynamicConfigValueEditor = ({
         </Label>
         {!isSystemOverride && (
           <div>
-            <IconButton name="times" onClick={onRemove} tooltip="Remove label" />
+            <IconButton
+              name="times"
+              onClick={onRemove}
+              tooltip={t(
+                'dashboard.dynamic-config-value-editor.render-label.tooltip-remove-property',
+                'Remove property'
+              )}
+            />
           </div>
         )}
-      </HorizontalGroup>
+      </Stack>
     );
   /* eslint-enable react/display-name */
 
@@ -83,10 +92,10 @@ export const DynamicConfigValueEditor = ({
       <OptionsPaneCategory
         id={item.name}
         renderTitle={renderLabel(false, true)}
-        className={css`
-          padding-left: 0;
-          padding-right: 0;
-        `}
+        className={css({
+          paddingLeft: 0,
+          paddingRight: 0,
+        })}
         isNested
         isOpenDefault={property.value !== undefined}
       >
@@ -130,13 +139,11 @@ export const DynamicConfigValueEditor = ({
   );
 };
 
-const getStyles = (theme: GrafanaTheme2) => {
-  return {
-    collapsibleOverrideEditor: css`
-      label: collapsibleOverrideEditor;
-      & + .dynamicConfigValueEditor--nonCollapsible {
-        margin-top: ${theme.spacing(1)};
-      }
-    `,
-  };
-};
+const getStyles = (theme: GrafanaTheme2) => ({
+  collapsibleOverrideEditor: css({
+    label: 'collapsibleOverrideEditor',
+    '& + .dynamicConfigValueEditor--nonCollapsible': {
+      marginTop: theme.spacing(1),
+    },
+  }),
+});

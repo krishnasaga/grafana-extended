@@ -4,21 +4,22 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/grafana/grafana/pkg/api/dtos"
 	"github.com/grafana/grafana/pkg/api/response"
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	dashboardsnapshot "github.com/grafana/grafana/pkg/apis/dashboardsnapshot/v0alpha1"
-	"github.com/grafana/grafana/pkg/infra/appcontext"
 	"github.com/grafana/grafana/pkg/infra/metrics"
+	ac "github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/apiserver/endpoints/request"
 	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
 	"github.com/grafana/grafana/pkg/services/dashboards"
 	"github.com/grafana/grafana/pkg/services/dashboardsnapshots"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
-	"github.com/grafana/grafana/pkg/services/guardian"
 	"github.com/grafana/grafana/pkg/util"
-	"github.com/grafana/grafana/pkg/util/errutil/errhttp"
+	"github.com/grafana/grafana/pkg/util/errhttp"
 	"github.com/grafana/grafana/pkg/web"
 )
 
@@ -27,13 +28,13 @@ func (hs *HTTPServer) getCreatedSnapshotHandler() web.Handler {
 	if hs.Features.IsEnabledGlobally(featuremgmt.FlagKubernetesSnapshots) {
 		namespaceMapper := request.GetNamespaceMapper(hs.Cfg)
 		return func(w http.ResponseWriter, r *http.Request) {
-			user, err := appcontext.User(r.Context())
+			user, err := identity.GetRequester(r.Context())
 			if err != nil || user == nil {
 				errhttp.Write(r.Context(), fmt.Errorf("no user"), w)
 				return
 			}
 			r.URL.Path = "/apis/dashboardsnapshot.grafana.app/v0alpha1/namespaces/" +
-				namespaceMapper(user.OrgID) + "/dashboardsnapshots/create"
+				namespaceMapper(user.GetOrgID()) + "/dashboardsnapshots/create"
 			hs.clientConfigProvider.DirectlyServeHTTP(w, r)
 		}
 	}
@@ -56,7 +57,7 @@ func (hs *HTTPServer) GetSharingOptions(c *contextmodel.ReqContext) {
 	})
 }
 
-// swagger:route POST /snapshots snapshots createDashboardSnapshot
+// swagger:route POST /snapshots dashboards snapshots createDashboardSnapshot
 //
 // When creating a snapshot using the API, you have to provide the full dashboard payload including the snapshot data. This endpoint is designed for the Grafana UI.
 //
@@ -68,16 +69,31 @@ func (hs *HTTPServer) GetSharingOptions(c *contextmodel.ReqContext) {
 // 403: forbiddenError
 // 500: internalServerError
 func (hs *HTTPServer) CreateDashboardSnapshot(c *contextmodel.ReqContext) {
+	cmd := dashboardsnapshots.CreateDashboardSnapshotCommand{}
+	if err := web.Bind(c.Req, &cmd); err != nil {
+		c.JsonApiErr(http.StatusBadRequest, "bad request data", err)
+		return
+	}
+
+	// Do not check permissions when the instance snapshot public mode is enabled
+	if !hs.Cfg.SnapshotPublicMode {
+		evaluator := ac.EvalAll(ac.EvalPermission(dashboards.ActionSnapshotsCreate), ac.EvalPermission(dashboards.ActionDashboardsRead, dashboards.ScopeDashboardsProvider.GetResourceScopeUID(cmd.Dashboard.GetNestedString("uid"))))
+		if canSave, err := hs.AccessControl.Evaluate(c.Req.Context(), c.SignedInUser, evaluator); err != nil || !canSave {
+			c.JsonApiErr(http.StatusForbidden, "forbidden", err)
+			return
+		}
+	}
+
 	dashboardsnapshots.CreateDashboardSnapshot(c, dashboardsnapshot.SnapshotSharingOptions{
 		SnapshotsEnabled:     hs.Cfg.SnapshotEnabled,
 		ExternalEnabled:      hs.Cfg.ExternalEnabled,
 		ExternalSnapshotName: hs.Cfg.ExternalSnapshotName,
 		ExternalSnapshotURL:  hs.Cfg.ExternalSnapshotUrl,
-	}, hs.dashboardsnapshotsService)
+	}, cmd, hs.dashboardsnapshotsService)
 }
 
 // GET /api/snapshots/:key
-// swagger:route GET /snapshots/{key} snapshots getDashboardSnapshot
+// swagger:route GET /snapshots/{key} dashboards snapshots getDashboardSnapshot
 //
 // Get Snapshot by Key.
 //
@@ -126,7 +142,7 @@ func (hs *HTTPServer) GetDashboardSnapshot(c *contextmodel.ReqContext) response.
 	return response.JSON(http.StatusOK, dto).SetHeader("Cache-Control", "public, max-age=3600")
 }
 
-// swagger:route GET /snapshots-delete/{deleteKey} snapshots deleteDashboardSnapshotByDeleteKey
+// swagger:route GET /snapshots-delete/{deleteKey} dashboards snapshots deleteDashboardSnapshotByDeleteKey
 //
 // Delete Snapshot by deleteKey.
 //
@@ -162,7 +178,7 @@ func (hs *HTTPServer) DeleteDashboardSnapshotByDeleteKey(c *contextmodel.ReqCont
 	})
 }
 
-// swagger:route DELETE /snapshots/{key} snapshots deleteDashboardSnapshot
+// swagger:route DELETE /snapshots/{key} dashboards snapshots deleteDashboardSnapshot
 //
 // Delete Snapshot by Key.
 //
@@ -210,21 +226,15 @@ func (hs *HTTPServer) DeleteDashboardSnapshot(c *contextmodel.ReqContext) respon
 	dashboardID := queryResult.Dashboard.Get("id").MustInt64()
 
 	if dashboardID != 0 {
-		g, err := guardian.New(c.Req.Context(), dashboardID, c.SignedInUser.GetOrgID(), c.SignedInUser)
-		if err != nil {
-			if !errors.Is(err, dashboards.ErrDashboardNotFound) {
-				return response.Err(err)
-			}
-		} else {
-			canEdit, err := g.CanEdit()
-			// check for permissions only if the dashboard is found
-			if err != nil && !errors.Is(err, dashboards.ErrDashboardNotFound) {
-				return response.Error(http.StatusInternalServerError, "Error while checking permissions for snapshot", err)
-			}
+		evaluator := ac.EvalPermission(dashboards.ActionDashboardsWrite, dashboards.ScopeDashboardsProvider.GetResourceScope(strconv.FormatInt(dashboardID, 10)))
+		canEdit, err := hs.AccessControl.Evaluate(c.Req.Context(), c.SignedInUser, evaluator)
+		// check for permissions only if the dashboard is found
+		if err != nil && !errors.Is(err, dashboards.ErrDashboardNotFound) {
+			return response.Error(http.StatusInternalServerError, "Error while checking permissions for snapshot", err)
+		}
 
-			if !canEdit && queryResult.UserID != c.SignedInUser.UserID && !errors.Is(err, dashboards.ErrDashboardNotFound) {
-				return response.Error(http.StatusForbidden, "Access denied to this snapshot", nil)
-			}
+		if !canEdit && queryResult.UserID != c.UserID && !errors.Is(err, dashboards.ErrDashboardNotFound) {
+			return response.Error(http.StatusForbidden, "Access denied to this snapshot", nil)
 		}
 	}
 
@@ -240,7 +250,7 @@ func (hs *HTTPServer) DeleteDashboardSnapshot(c *contextmodel.ReqContext) respon
 	})
 }
 
-// swagger:route GET /dashboard/snapshots snapshots searchDashboardSnapshots
+// swagger:route GET /dashboard/snapshots dashboards snapshots searchDashboardSnapshots
 //
 // List snapshots.
 //
@@ -263,7 +273,7 @@ func (hs *HTTPServer) SearchDashboardSnapshots(c *contextmodel.ReqContext) respo
 	searchQuery := dashboardsnapshots.GetDashboardSnapshotsQuery{
 		Name:         query,
 		Limit:        limit,
-		OrgID:        c.SignedInUser.GetOrgID(),
+		OrgID:        c.GetOrgID(),
 		SignedInUser: c.SignedInUser,
 	}
 

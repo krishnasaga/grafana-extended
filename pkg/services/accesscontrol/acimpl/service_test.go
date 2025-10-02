@@ -2,26 +2,29 @@ package acimpl
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/infra/localcache"
 	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/models/roletype"
+	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/plugins"
 	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/actest"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/database"
-	"github.com/grafana/grafana/pkg/services/auth/identity"
+	"github.com/grafana/grafana/pkg/services/accesscontrol/permreg"
+	"github.com/grafana/grafana/pkg/services/accesscontrol/resourcepermissions"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/licensing"
-	"github.com/grafana/grafana/pkg/services/org"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/setting"
 	"github.com/grafana/grafana/pkg/tests/testsuite"
+	"github.com/grafana/grafana/pkg/util/testutil"
 )
 
 func TestMain(m *testing.M) {
@@ -33,19 +36,23 @@ func setupTestEnv(t testing.TB) *Service {
 	cfg := setting.NewCfg()
 
 	ac := &Service{
-		cache:         localcache.ProvideService(),
-		cfg:           cfg,
-		features:      featuremgmt.WithFeatures(),
-		log:           log.New("accesscontrol"),
-		registrations: accesscontrol.RegistrationList{},
-		roles:         accesscontrol.BuildBasicRoleDefinitions(),
-		store:         database.ProvideService(db.InitTestDB(t)),
+		cache:          localcache.ProvideService(),
+		cfg:            cfg,
+		features:       featuremgmt.WithFeatures(),
+		log:            log.New("accesscontrol"),
+		registrations:  accesscontrol.RegistrationList{},
+		roles:          accesscontrol.BuildBasicRoleDefinitions(),
+		store:          database.ProvideService(db.InitTestDB(t)),
+		permRegistry:   permreg.ProvidePermissionRegistry(),
+		actionResolver: resourcepermissions.NewActionSetService(),
 	}
 	require.NoError(t, ac.RegisterFixedRoles(context.Background()))
 	return ac
 }
 
-func TestUsageMetrics(t *testing.T) {
+func TestIntegrationUsageMetrics(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	tests := []struct {
 		name          string
 		expectedValue int
@@ -63,15 +70,22 @@ func TestUsageMetrics(t *testing.T) {
 			s := ProvideOSSService(
 				cfg,
 				database.ProvideService(db.InitTestDB(t)),
+				&resourcepermissions.FakeActionSetSvc{},
 				localcache.ProvideService(),
 				featuremgmt.WithFeatures(),
+				tracing.InitializeTracerForTest(),
+				nil,
+				permreg.ProvidePermissionRegistry(),
+				nil,
 			)
 			assert.Equal(t, tt.expectedValue, s.GetUsageStats(context.Background())["stats.oss.accesscontrol.enabled.count"])
 		})
 	}
 }
 
-func TestService_DeclareFixedRoles(t *testing.T) {
+func TestIntegrationService_DeclareFixedRoles(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	tests := []struct {
 		name          string
 		registrations []accesscontrol.RoleRegistration
@@ -112,7 +126,7 @@ func TestService_DeclareFixedRoles(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			err:     accesscontrol.ErrInvalidBuiltinRole,
+			err:     accesscontrol.ErrInvalidBuiltinRole.Build(accesscontrol.ErrInvalidBuiltinRoleData("WrongAdmin")),
 		},
 		{
 			name: "should add multiple registrations at once",
@@ -156,7 +170,9 @@ func TestService_DeclareFixedRoles(t *testing.T) {
 	}
 }
 
-func TestService_DeclarePluginRoles(t *testing.T) {
+func TestIntegrationService_DeclarePluginRoles(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	tests := []struct {
 		name          string
 		pluginID      string
@@ -224,7 +240,7 @@ func TestService_DeclarePluginRoles(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			err:     accesscontrol.ErrInvalidBuiltinRole,
+			err:     accesscontrol.ErrInvalidBuiltinRole.Build(accesscontrol.ErrInvalidBuiltinRoleData("WrongAdmin")),
 		},
 		{
 			name:     "should add multiple registrations at once",
@@ -245,7 +261,6 @@ func TestService_DeclarePluginRoles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ac := setupTestEnv(t)
-			ac.features = featuremgmt.WithFeatures(featuremgmt.FlagAccessControlOnCall)
 
 			// Reset the registations
 			ac.registrations = accesscontrol.RegistrationList{}
@@ -270,7 +285,9 @@ func TestService_DeclarePluginRoles(t *testing.T) {
 	}
 }
 
-func TestService_RegisterFixedRoles(t *testing.T) {
+func TestIntegrationService_RegisterFixedRoles(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	tests := []struct {
 		name          string
 		token         licensing.Licensing
@@ -363,6 +380,7 @@ func TestService_RegisterFixedRoles(t *testing.T) {
 					builtinRole, ok := ac.roles[br]
 					assert.True(t, ok)
 					for _, expectedPermission := range registration.Role.Permissions {
+						expectedPermission.Kind, expectedPermission.Attribute, expectedPermission.Identifier = accesscontrol.SplitScope(expectedPermission.Scope)
 						assert.Contains(t, builtinRole.Permissions, expectedPermission)
 					}
 				}
@@ -371,7 +389,9 @@ func TestService_RegisterFixedRoles(t *testing.T) {
 	}
 }
 
-func TestService_SearchUsersPermissions(t *testing.T) {
+func TestIntegrationService_SearchUsersPermissions(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	searchOption := accesscontrol.SearchOptions{ActionPrefix: "teams"}
 	ctx := context.Background()
 	listAllPerms := map[string][]string{accesscontrol.ActionUsersPermissionsRead: {"users:*"}}
@@ -391,7 +411,7 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 			siuPermissions: listAllPerms,
 			searchOption:   searchOption,
 			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleAdmin): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleAdmin): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 				}},
 				accesscontrol.RoleGrafanaAdmin: {Permissions: []accesscontrol.Permission{
@@ -399,8 +419,8 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 				}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
-				2: {string(roletype.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
+				1: {string(identity.RoleEditor)},
+				2: {string(identity.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
 			},
 			want: map[int64][]accesscontrol.Permission{
 				2: {{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
@@ -417,8 +437,8 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 					{Action: accesscontrol.ActionTeamsPermissionsRead, Scope: "teams:*"}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
-				2: {string(roletype.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
+				1: {string(identity.RoleEditor)},
+				2: {string(identity.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
 			},
 			want: map[int64][]accesscontrol.Permission{
 				1: {{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:1"}},
@@ -431,7 +451,7 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 			siuPermissions: listAllPerms,
 			searchOption:   searchOption,
 			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleAdmin): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleAdmin): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 				}},
 				accesscontrol.RoleGrafanaAdmin: {Permissions: []accesscontrol.Permission{
@@ -444,8 +464,8 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 					{Action: accesscontrol.ActionTeamsPermissionsRead, Scope: "teams:id:1"}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
-				2: {string(roletype.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
+				1: {string(identity.RoleEditor)},
+				2: {string(identity.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
 			},
 			want: map[int64][]accesscontrol.Permission{
 				1: {{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:1"}},
@@ -460,13 +480,13 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 			siuPermissions: listAllPerms,
 			searchOption:   accesscontrol.SearchOptions{Scope: "teams:id:2"},
 			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleAdmin): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleAdmin): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 				}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
-				2: {string(roletype.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
+				1: {string(identity.RoleEditor)},
+				2: {string(identity.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
 			},
 			want: map[int64][]accesscontrol.Permission{
 				2: {{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"}},
@@ -487,7 +507,7 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 					{Action: accesscontrol.ActionTeamsPermissionsRead, Scope: "teams:id:1"}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
+				1: {string(identity.RoleEditor)},
 				2: {accesscontrol.RoleGrafanaAdmin},
 			},
 			want: map[int64][]accesscontrol.Permission{
@@ -537,12 +557,12 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 			// only the user's basic roles and the user's stored permissions
 			name:           "check namespacedId filter works correctly",
 			siuPermissions: listAllPerms,
-			searchOption:   accesscontrol.SearchOptions{NamespacedID: identity.NamespaceServiceAccount + ":1"},
+			searchOption:   accesscontrol.SearchOptions{UserID: 1},
 			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleEditor): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleEditor): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 				}},
-				string(roletype.RoleAdmin): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleAdmin): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsWrite, Scope: "teams:*"},
 				}},
 				accesscontrol.RoleGrafanaAdmin: {Permissions: []accesscontrol.Permission{
@@ -555,8 +575,8 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 					{Action: accesscontrol.ActionTeamsPermissionsRead, Scope: "teams:id:1"}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
-				2: {string(roletype.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
+				1: {string(identity.RoleEditor)},
+				2: {string(identity.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
 			},
 			want: map[int64][]accesscontrol.Permission{
 				1: {{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:1"}, {Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"}},
@@ -592,28 +612,32 @@ func TestService_SearchUsersPermissions(t *testing.T) {
 	}
 }
 
-func TestService_SearchUserPermissions(t *testing.T) {
+func TestIntegrationService_SearchUserPermissions(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	ctx := context.Background()
 	tests := []struct {
-		name         string
-		searchOption accesscontrol.SearchOptions
-		ramRoles     map[string]*accesscontrol.RoleDTO    // BasicRole => RBAC BasicRole
-		storedPerms  map[int64][]accesscontrol.Permission // UserID => Permissions
-		storedRoles  map[int64][]string                   // UserID => Roles
-		want         []accesscontrol.Permission
-		wantErr      bool
+		name           string
+		searchOption   accesscontrol.SearchOptions
+		withActionSets bool
+		actionSets     map[string][]string
+		ramRoles       map[string]*accesscontrol.RoleDTO    // BasicRole => RBAC BasicRole
+		storedPerms    map[int64][]accesscontrol.Permission // UserID => Permissions
+		storedRoles    map[int64][]string                   // UserID => Roles
+		want           []accesscontrol.Permission
+		wantErr        bool
 	}{
 		{
 			name: "ram only",
 			searchOption: accesscontrol.SearchOptions{
 				ActionPrefix: "teams",
-				NamespacedID: identity.NamespaceUser + ":2",
+				UserID:       2,
 			},
 			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleEditor): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleEditor): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsCreate},
 				}},
-				string(roletype.RoleAdmin): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleAdmin): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 				}},
 				accesscontrol.RoleGrafanaAdmin: {Permissions: []accesscontrol.Permission{
@@ -621,8 +645,8 @@ func TestService_SearchUserPermissions(t *testing.T) {
 				}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
-				2: {string(roletype.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
+				1: {string(identity.RoleEditor)},
+				2: {string(identity.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
 			},
 			want: []accesscontrol.Permission{
 				{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
@@ -632,7 +656,7 @@ func TestService_SearchUserPermissions(t *testing.T) {
 			name: "stored only",
 			searchOption: accesscontrol.SearchOptions{
 				ActionPrefix: "teams",
-				NamespacedID: identity.NamespaceUser + ":2",
+				UserID:       2,
 			},
 			storedPerms: map[int64][]accesscontrol.Permission{
 				1: {{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:1"}},
@@ -640,8 +664,8 @@ func TestService_SearchUserPermissions(t *testing.T) {
 					{Action: accesscontrol.ActionTeamsPermissionsRead, Scope: "teams:*"}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
-				2: {string(roletype.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
+				1: {string(identity.RoleEditor)},
+				2: {string(identity.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
 			},
 			want: []accesscontrol.Permission{
 				{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
@@ -652,10 +676,10 @@ func TestService_SearchUserPermissions(t *testing.T) {
 			name: "ram and stored",
 			searchOption: accesscontrol.SearchOptions{
 				ActionPrefix: "teams",
-				NamespacedID: identity.NamespaceUser + ":2",
+				UserID:       2,
 			},
 			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleAdmin): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleAdmin): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 				}},
 				accesscontrol.RoleGrafanaAdmin: {Permissions: []accesscontrol.Permission{
@@ -668,8 +692,8 @@ func TestService_SearchUserPermissions(t *testing.T) {
 					{Action: accesscontrol.ActionTeamsPermissionsRead, Scope: "teams:id:1"}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
-				2: {string(roletype.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
+				1: {string(identity.RoleEditor)},
+				2: {string(identity.RoleAdmin), accesscontrol.RoleGrafanaAdmin},
 			},
 			want: []accesscontrol.Permission{
 				{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:1"},
@@ -682,10 +706,10 @@ func TestService_SearchUserPermissions(t *testing.T) {
 			name: "check action prefix filter works correctly",
 			searchOption: accesscontrol.SearchOptions{
 				ActionPrefix: "teams",
-				NamespacedID: identity.NamespaceUser + ":1",
+				UserID:       1,
 			},
 			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleEditor): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleEditor): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 					{Action: accesscontrol.ActionUsersCreate},
 					{Action: accesscontrol.ActionTeamsPermissionsRead, Scope: "teams:*"},
@@ -693,7 +717,7 @@ func TestService_SearchUserPermissions(t *testing.T) {
 				}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
+				1: {string(identity.RoleEditor)},
 			},
 			want: []accesscontrol.Permission{
 				{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
@@ -703,11 +727,11 @@ func TestService_SearchUserPermissions(t *testing.T) {
 		{
 			name: "check action filter works correctly",
 			searchOption: accesscontrol.SearchOptions{
-				Action:       accesscontrol.ActionTeamsRead,
-				NamespacedID: identity.NamespaceUser + ":1",
+				Action: accesscontrol.ActionTeamsRead,
+				UserID: 1,
 			},
 			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleEditor): {Permissions: []accesscontrol.Permission{
+				string(identity.RoleEditor): {Permissions: []accesscontrol.Permission{
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 					{Action: accesscontrol.ActionUsersCreate},
 					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:1"},
@@ -715,17 +739,93 @@ func TestService_SearchUserPermissions(t *testing.T) {
 				}},
 			},
 			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleEditor)},
+				1: {string(identity.RoleEditor)},
 			},
 			want: []accesscontrol.Permission{
 				{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:1"},
 				{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
 			},
 		},
+		{
+			name: "check action sets are correctly included if an action is specified",
+			searchOption: accesscontrol.SearchOptions{
+				Action: "dashboards:read",
+				UserID: 1,
+			},
+			withActionSets: true,
+			actionSets: map[string][]string{
+				"dashboards:view": {"dashboards:read"},
+				"dashboards:edit": {"dashboards:read", "dashboards:write", "dashboards:read-advanced"},
+			},
+			ramRoles: map[string]*accesscontrol.RoleDTO{
+				string(identity.RoleEditor): {Permissions: []accesscontrol.Permission{
+					{Action: "dashboards:read", Scope: "dashboards:uid:ram"},
+				}},
+			},
+			storedRoles: map[int64][]string{
+				1: {string(identity.RoleEditor)},
+			},
+			storedPerms: map[int64][]accesscontrol.Permission{
+				1: {
+					{Action: "dashboards:read", Scope: "dashboards:uid:stored"},
+					{Action: "dashboards:edit", Scope: "dashboards:uid:stored2"},
+					{Action: "dashboards:view", Scope: "dashboards:uid:stored3"},
+				},
+			},
+			want: []accesscontrol.Permission{
+				{Action: "dashboards:read", Scope: "dashboards:uid:ram"},
+				{Action: "dashboards:read", Scope: "dashboards:uid:stored"},
+				{Action: "dashboards:read", Scope: "dashboards:uid:stored2"},
+				{Action: "dashboards:read", Scope: "dashboards:uid:stored3"},
+			},
+		},
+		{
+			name: "check action sets are correctly included if an action prefix is specified",
+			searchOption: accesscontrol.SearchOptions{
+				ActionPrefix: "dashboards",
+				UserID:       1,
+			},
+			withActionSets: true,
+			actionSets: map[string][]string{
+				"dashboards:view": {"dashboards:read"},
+				"folders:view":    {"dashboards:read", "folders:read"},
+				"dashboards:edit": {"dashboards:read", "dashboards:write"},
+			},
+			ramRoles: map[string]*accesscontrol.RoleDTO{
+				string(identity.RoleEditor): {Permissions: []accesscontrol.Permission{
+					{Action: "dashboards:read", Scope: "dashboards:uid:ram"},
+				}},
+			},
+			storedRoles: map[int64][]string{
+				1: {string(identity.RoleEditor)},
+			},
+			storedPerms: map[int64][]accesscontrol.Permission{
+				1: {
+					{Action: "dashboards:read", Scope: "dashboards:uid:stored"},
+					{Action: "folders:view", Scope: "folders:uid:stored2"},
+					{Action: "dashboards:edit", Scope: "dashboards:uid:stored3"},
+				},
+			},
+			want: []accesscontrol.Permission{
+				{Action: "dashboards:read", Scope: "dashboards:uid:ram"},
+				{Action: "dashboards:read", Scope: "dashboards:uid:stored"},
+				{Action: "dashboards:read", Scope: "folders:uid:stored2"},
+				{Action: "dashboards:read", Scope: "dashboards:uid:stored3"},
+				{Action: "dashboards:write", Scope: "dashboards:uid:stored3"},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ac := setupTestEnv(t)
+			if tt.withActionSets {
+				actionSetSvc := resourcepermissions.NewActionSetService()
+				for set, actions := range tt.actionSets {
+					actionSetName := resourcepermissions.GetActionSetName(strings.Split(set, ":")[0], strings.Split(set, ":")[1])
+					actionSetSvc.StoreActionSet(actionSetName, actions)
+				}
+				ac.actionResolver = actionSetSvc
+			}
 
 			ac.roles = tt.ramRoles
 			ac.store = actest.FakeStore{
@@ -745,64 +845,9 @@ func TestService_SearchUserPermissions(t *testing.T) {
 	}
 }
 
-func TestPermissionCacheKey(t *testing.T) {
-	testcases := []struct {
-		name         string
-		signedInUser *user.SignedInUser
-		expected     string
-	}{
-		{
-			name: "should return correct key for user",
-			signedInUser: &user.SignedInUser{
-				OrgID:  1,
-				UserID: 1,
-			},
-			expected: "rbac-permissions-1-user-1",
-		},
-		{
-			name: "should return correct key for api key",
-			signedInUser: &user.SignedInUser{
-				OrgID:            1,
-				ApiKeyID:         1,
-				IsServiceAccount: false,
-			},
-			expected: "rbac-permissions-1-api-key-1",
-		},
-		{
-			name: "should return correct key for service account",
-			signedInUser: &user.SignedInUser{
-				OrgID:            1,
-				UserID:           1,
-				IsServiceAccount: true,
-			},
-			expected: "rbac-permissions-1-service-account-1",
-		},
-		{
-			name: "should return correct key for matching a service account with userId -1",
-			signedInUser: &user.SignedInUser{
-				OrgID:            1,
-				UserID:           -1,
-				IsServiceAccount: true,
-			},
-			expected: "rbac-permissions-1-service-account--1",
-		},
-		{
-			name: "should use org role if no unique id",
-			signedInUser: &user.SignedInUser{
-				OrgID:   1,
-				OrgRole: org.RoleNone,
-			},
-			expected: "rbac-permissions-1-user-None",
-		},
-	}
-	for _, tc := range testcases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, permissionCacheKey(tc.signedInUser))
-		})
-	}
-}
+func TestIntegrationService_SaveExternalServiceRole(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
 
-func TestService_SaveExternalServiceRole(t *testing.T) {
 	type run struct {
 		cmd     accesscontrol.SaveExternalServiceRoleCommand
 		wantErr bool
@@ -869,6 +914,7 @@ func TestService_SaveExternalServiceRole(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			ac := setupTestEnv(t)
+			ac.cfg.ManagedServiceAccountsEnabled = true
 			ac.features = featuremgmt.WithFeatures(featuremgmt.FlagExternalServiceAccounts)
 			for _, r := range tt.runs {
 				err := ac.SaveExternalServiceRole(ctx, r.cmd)
@@ -881,13 +927,22 @@ func TestService_SaveExternalServiceRole(t *testing.T) {
 				// Check that the permissions and assignment are stored correctly
 				perms, errGetPerms := ac.getUserPermissions(ctx, &user.SignedInUser{OrgID: r.cmd.AssignmentOrgID, UserID: 2}, accesscontrol.Options{})
 				require.NoError(t, errGetPerms)
-				assert.ElementsMatch(t, r.cmd.Permissions, perms)
+
+				// Only compare action and scope
+				expPerms := make([]accesscontrol.Permission, len(r.cmd.Permissions))
+				for i, p := range r.cmd.Permissions {
+					expPerms[i] = accesscontrol.Permission{Action: p.Action, Scope: p.Scope}
+				}
+				// shared with me is added by default for all users in pkg/services/accesscontrol/acimpl/service.go
+				assert.Equal(t, append([]accesscontrol.Permission{{Action: "folders:read", Scope: "folders:uid:sharedwithme"}}, expPerms...), perms)
 			}
 		})
 	}
 }
 
-func TestService_DeleteExternalServiceRole(t *testing.T) {
+func TestIntegrationService_DeleteExternalServiceRole(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	tests := []struct {
 		name              string
 		initCmd           *accesscontrol.SaveExternalServiceRoleCommand
@@ -915,6 +970,7 @@ func TestService_DeleteExternalServiceRole(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			ac := setupTestEnv(t)
+			ac.cfg.ManagedServiceAccountsEnabled = true
 			ac.features = featuremgmt.WithFeatures(featuremgmt.FlagExternalServiceAccounts)
 
 			if tt.initCmd != nil {
@@ -933,64 +989,46 @@ func TestService_DeleteExternalServiceRole(t *testing.T) {
 				// Check that the permissions and assignment are removed correctly
 				perms, errGetPerms := ac.getUserPermissions(ctx, &user.SignedInUser{OrgID: tt.initCmd.AssignmentOrgID, UserID: 2}, accesscontrol.Options{})
 				require.NoError(t, errGetPerms)
-				assert.Empty(t, perms)
+				// shared with me is added by default for all users in pkg/services/accesscontrol/acimpl/service.go
+				assert.Equal(t, []accesscontrol.Permission{{Action: "folders:read", Scope: "folders:uid:sharedwithme"}}, perms)
 			}
 		})
 	}
 }
 
-func TestService_GetUserPermissionsInOrg(t *testing.T) {
-	tests := []struct {
-		name        string
-		orgID       int64
-		ramRoles    map[string]*accesscontrol.RoleDTO    // BasicRole => RBAC BasicRole
-		storedPerms map[int64][]accesscontrol.Permission // UserID => Permissions
-		storedRoles map[int64][]string                   // UserID => Roles
-		want        []accesscontrol.Permission
-	}{
-		{
-			name:  "should get correct permissions from another org",
-			orgID: 2,
-			ramRoles: map[string]*accesscontrol.RoleDTO{
-				string(roletype.RoleEditor): {Permissions: []accesscontrol.Permission{}},
-				string(roletype.RoleAdmin): {Permissions: []accesscontrol.Permission{
-					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:*"},
-				}},
-			},
-			storedPerms: map[int64][]accesscontrol.Permission{
-				1: {
-					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:1"},
-					{Action: accesscontrol.ActionTeamsPermissionsRead, Scope: "teams:id:1"},
-				},
-				2: {
-					{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:2"},
-				},
-			},
-			storedRoles: map[int64][]string{
-				1: {string(roletype.RoleAdmin)},
-				2: {string(roletype.RoleEditor)},
-			},
-			want: []accesscontrol.Permission{
-				{Action: accesscontrol.ActionTeamsRead, Scope: "teams:id:2"},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			ac := setupTestEnv(t)
+func TestIntegrationService_GetRoleByName(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
 
-			ac.roles = tt.ramRoles
-			ac.store = actest.FakeStore{
-				ExpectedUsersPermissions: tt.storedPerms,
-				ExpectedUsersRoles:       tt.storedRoles,
-			}
-			user := &user.SignedInUser{OrgID: 1, UserID: 2}
+	t.Parallel()
 
-			got, err := ac.GetUserPermissionsInOrg(ctx, user, 2)
-			require.Nil(t, err)
+	ctx := context.Background()
 
-			assert.ElementsMatch(t, got, tt.want)
+	t.Run("when the role does not exists, it returns an error", func(t *testing.T) {
+		t.Parallel()
+
+		ac := setupTestEnv(t)
+		ac.registrations = accesscontrol.RegistrationList{}
+
+		role, err := ac.GetRoleByName(ctx, 0, "not-found-role")
+		require.ErrorIs(t, err, accesscontrol.ErrRoleNotFound)
+		require.Nil(t, role)
+	})
+
+	t.Run("when the role exists, it is returned", func(t *testing.T) {
+		t.Parallel()
+
+		roleName := "fixed:test:test"
+
+		ac := setupTestEnv(t)
+		ac.registrations = accesscontrol.RegistrationList{}
+		ac.registrations.Append(accesscontrol.RoleRegistration{
+			Role:   accesscontrol.RoleDTO{Name: roleName},
+			Grants: []string{"Admin"},
 		})
-	}
+
+		role, err := ac.GetRoleByName(ctx, 0, roleName)
+		require.NoError(t, err)
+		require.NotNil(t, role)
+		require.Equal(t, roleName, role.Name)
+	})
 }

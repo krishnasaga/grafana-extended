@@ -1,13 +1,10 @@
-import { Meta, Story } from '@storybook/react';
-import React from 'react';
+import { Meta, StoryFn } from '@storybook/react';
 
-import { Spinner } from '@grafana/ui';
-
-import { Props } from './Spinner';
+import { Props, Spinner } from './Spinner';
 import mdx from './Spinner.mdx';
 
 const meta: Meta = {
-  title: 'Visualizations/Spinner',
+  title: 'Information/Spinner',
   component: Spinner,
   parameters: {
     docs: {
@@ -29,7 +26,7 @@ interface StoryProps extends Partial<Props> {
   withStyle: boolean;
 }
 
-export const Basic: Story<StoryProps> = (args) => {
+export const Basic: StoryFn<StoryProps> = (args) => {
   return (
     <div>
       <Spinner

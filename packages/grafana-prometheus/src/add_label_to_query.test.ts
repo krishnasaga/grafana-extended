@@ -1,3 +1,4 @@
+// Core Grafana history https://github.com/grafana/grafana/blob/v11.0.0-preview/public/app/plugins/datasource/prometheus/add_label_to_query.test.ts
 import { addLabelToQuery } from './add_label_to_query';
 
 describe('addLabelToQuery()', () => {
@@ -65,6 +66,15 @@ describe('addLabelToQuery()', () => {
     );
   });
 
+  it('should modify existing labels if the operator is different', () => {
+    expect(addLabelToQuery(addLabelToQuery('foo{x="yy"}', 'bar', 'baz', '!='), 'bar', 'baz', '=')).toBe(
+      'foo{x="yy", bar="baz"}'
+    );
+    expect(addLabelToQuery(addLabelToQuery('foo{x="yy"}', 'bar', 'baz', '='), 'bar', 'baz', '!=')).toBe(
+      'foo{x="yy", bar!="baz"}'
+    );
+  });
+
   it('should not remove filters', () => {
     expect(addLabelToQuery('{x="y"} |="yy"', 'bar', 'baz')).toBe('{x="y", bar="baz"} |="yy"');
     expect(addLabelToQuery('{x="y"} |="yy" !~"xx"', 'bar', 'baz')).toBe('{x="y", bar="baz"} |="yy" !~"xx"');
@@ -110,5 +120,25 @@ describe('addLabelToQuery()', () => {
 
   it('should not add ad-hoc filter bool operator', () => {
     expect(addLabelToQuery('ALERTS < bool 1', 'bar', 'baz')).toBe('ALERTS{bar="baz"} < bool 1');
+  });
+
+  it('should add a utf8 label', () => {
+    expect(addLabelToQuery('{"metric.name"}', 'cenk.erdem', 'muhabbet')).toBe(
+      '{"metric.name", "cenk.erdem"="muhabbet"}'
+    );
+
+    expect(addLabelToQuery('metric{label="val"}', 'cenk.erdem', 'muhabbet')).toBe(
+      'metric{label="val", "cenk.erdem"="muhabbet"}'
+    );
+  });
+
+  it('should not add a utf8 label when it is already applied', () => {
+    expect(addLabelToQuery('{"metric.name", "cenk.erdem"="muhabbet"}', 'cenk.erdem', 'muhabbet')).toBe(
+      '{"metric.name", "cenk.erdem"="muhabbet"}'
+    );
+
+    expect(addLabelToQuery('metric{label="val", "cenk.erdem"="muhabbet"}', 'cenk.erdem', 'muhabbet')).toBe(
+      'metric{label="val", "cenk.erdem"="muhabbet"}'
+    );
   });
 });

@@ -131,6 +131,10 @@ export interface VariableModel {
    */
   allValue?: string;
   /**
+   * Allow custom values to be entered in the variable
+   */
+  allowCustomValue?: boolean;
+  /**
    * Shows current selected variable text/value on the dashboard
    */
   current?: VariableOption;
@@ -188,16 +192,26 @@ export interface VariableModel {
    */
   sort?: VariableSort;
   /**
+   * Additional static options for query variable
+   */
+  staticOptions?: Array<VariableOption>;
+  /**
+   * Ordering of static options in relation to options returned from data source for query variable
+   */
+  staticOptionsOrder?: ('before' | 'after' | 'sorted');
+  /**
    * Type of variable
    */
   type: VariableType;
 }
 
 export const defaultVariableModel: Partial<VariableModel> = {
+  allowCustomValue: true,
   includeAll: false,
   multi: false,
   options: [],
   skipUrlSync: false,
+  staticOptions: [],
 };
 
 /**
@@ -232,12 +246,13 @@ export enum VariableRefresh {
 
 /**
  * Determine if the variable shows on dashboard
- * Accepted values are 0 (show label and value), 1 (show value only), 2 (show nothing).
+ * Accepted values are 0 (show label and value), 1 (show value only), 2 (show nothing), 3 (show under the controls dropdown menu).
  */
 export enum VariableHide {
   dontHide = 0,
   hideLabel = 1,
   hideVariable = 2,
+  inControlsMenu = 3,
 }
 
 /**
@@ -300,6 +315,10 @@ export interface DashboardLink {
    */
   keepTime: boolean;
   /**
+   * Placement can be used to display the link somewhere else on the dashboard other than above the visualisations.
+   */
+  placement?: DashboardLinkPlacement;
+  /**
    * List of tags to limit the linked dashboards. If empty, all dashboards will be displayed. Only valid if the type is dashboards
    */
   tags: Array<string>;
@@ -339,6 +358,93 @@ export const defaultDashboardLink: Partial<DashboardLink> = {
 export type DashboardLinkType = ('link' | 'dashboards');
 
 /**
+ * Dashboard Link placement. Defines where the link should be displayed.
+ * - "inControlsMenu" renders the link in bottom part of the dashboard controls dropdown menu
+ */
+export type DashboardLinkPlacement = 'inControlsMenu';
+
+/**
+ * Dashboard action type
+ */
+export type ActionType = ('fetch' | 'infinity');
+
+/**
+ * Fetch options
+ */
+export interface FetchOptions {
+  body?: string;
+  headers?: Array<Array<string>>;
+  method: HttpRequestMethod;
+  /**
+   * These are 2D arrays of strings, each representing a key-value pair
+   * We are defining this way because we can't generate a go struct that
+   * that would have exactly two strings in each sub-array
+   */
+  queryParams?: Array<Array<string>>;
+  url: string;
+}
+
+export const defaultFetchOptions: Partial<FetchOptions> = {
+  headers: [],
+  queryParams: [],
+};
+
+/**
+ * Infinity options
+ */
+export interface InfinityOptions {
+  body?: string;
+  datasourceUid: string;
+  headers?: Array<Array<string>>;
+  method: HttpRequestMethod;
+  /**
+   * These are 2D arrays of strings, each representing a key-value pair
+   * We are defining them this way because we can't generate a go struct that
+   * that would have exactly two strings in each sub-array
+   */
+  queryParams?: Array<Array<string>>;
+  url: string;
+}
+
+export const defaultInfinityOptions: Partial<InfinityOptions> = {
+  headers: [],
+  queryParams: [],
+};
+
+export type HttpRequestMethod = ('GET' | 'PUT' | 'POST' | 'DELETE' | 'PATCH');
+
+/**
+ * Action variable type
+ */
+export type ActionVariableType = 'string';
+
+export interface ActionVariable {
+  key: string;
+  name: string;
+  type: ActionVariableType;
+}
+
+/**
+ * Dashboard action
+ */
+export interface Action {
+  confirmation?: string;
+  fetch?: FetchOptions;
+  infinity?: InfinityOptions;
+  oneClick?: boolean;
+  style?: {
+    backgroundColor?: string;
+  };
+  title: string;
+  type: ActionType;
+  variables?: Array<ActionVariable>;
+}
+
+export const defaultAction: Partial<Action> = {
+  variables: [],
+};
+
+/**
  * Dashboard variable type
  * `query`: Query-generated list of values such as metric names, server names, sensor IDs, data centers, and so on.
  * `adhoc`: Key/value filters that are automatically added to all metric queries for a data source (Prometheus, Loki, InfluxDB, and Elasticsearch only).
@@ -349,7 +455,7 @@ export type DashboardLinkType = ('link' | 'dashboards');
  * `custom`: Define the variable options manually using a comma-separated list.
  * `system`: Variables defined by Grafana. See: https://grafana.com/docs/grafana/latest/dashboards/variables/add-template-variables/#global-variables
  */
-export type VariableType = ('query' | 'adhoc' | 'groupby' | 'constant' | 'datasource' | 'interval' | 'textbox' | 'custom' | 'system');
+export type VariableType = ('query' | 'adhoc' | 'groupby' | 'constant' | 'datasource' | 'interval' | 'textbox' | 'custom' | 'system' | 'snapshot');
 
 /**
  * Color mode for a field. You can specify a single color, or select a continuous (gradient) color schemes, based on a value.
@@ -647,6 +753,15 @@ export interface DataTransformerConfig {
 }
 
 /**
+ * Counterpart for TypeScript's TimeOption type.
+ */
+export interface TimeOption {
+  display: string;
+  from: string;
+  to: string;
+}
+
+/**
  * Time picker configuration
  * It defines the default config for the time picker and the refresh picker for the specific dashboard.
  */
@@ -660,19 +775,19 @@ export interface TimePickerConfig {
    */
   nowDelay?: string;
   /**
+   * Quick ranges for time picker.
+   */
+  quick_ranges?: Array<TimeOption>;
+  /**
    * Interval options available in the refresh picker dropdown.
    */
   refresh_intervals?: Array<string>;
-  /**
-   * Selectable options available in the time picker dropdown. Has no effect on provisioned dashboard.
-   */
-  time_options?: Array<string>;
 }
 
 export const defaultTimePickerConfig: Partial<TimePickerConfig> = {
   hidden: false,
+  quick_ranges: [],
   refresh_intervals: ['5s', '10s', '30s', '1m', '5m', '15m', '30m', '1h', '2h', '1d'],
-  time_options: ['5m', '15m', '1h', '6h', '12h', '24h', '2d', '7d', '30d'],
 };
 
 /**
@@ -883,6 +998,10 @@ export const defaultMatcherConfig: Partial<MatcherConfig> = {
  */
 export interface FieldConfig {
   /**
+   * Define interactive HTTP requests that can be triggered from data visualizations.
+   */
+  actions?: Array<Action>;
+  /**
    * Panel color configuration
    */
   color?: FieldColor;
@@ -967,6 +1086,7 @@ export interface FieldConfig {
 }
 
 export const defaultFieldConfig: Partial<FieldConfig> = {
+  actions: [],
   links: [],
   mappings: [],
 };
@@ -1062,6 +1182,10 @@ export interface Dashboard {
    * List of dashboard panels
    */
   panels?: Array<(Panel | RowPanel)>;
+  /**
+   * When set to true, the dashboard will load all panels in the dashboard when it's loaded.
+   */
+  preload?: boolean;
   /**
    * Refresh rate of dashboard. Represented via interval string, e.g. "5s", "1m", "1h", "1d".
    */
@@ -1182,7 +1306,7 @@ export const defaultDashboard: Partial<Dashboard> = {
   graphTooltip: DashboardCursorSync.Off,
   links: [],
   panels: [],
-  schemaVersion: 36,
+  schemaVersion: 42,
   tags: [],
   timezone: 'browser',
 };

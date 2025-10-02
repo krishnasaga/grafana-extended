@@ -1,40 +1,48 @@
+// Core Grafana history https://github.com/grafana/grafana/blob/v11.0.0-preview/public/app/plugins/datasource/prometheus/datasource.test.ts
 import { cloneDeep } from 'lodash';
 import { lastValueFrom, of } from 'rxjs';
 
 import {
-  AnnotationEvent,
-  AnnotationQueryRequest,
+  AdHocVariableFilter,
   CoreApp,
   CustomVariableModel,
   DataQueryRequest,
   DataSourceInstanceSettings,
   dateTime,
   LoadingState,
-  rangeUtil,
+  ScopeSpecFilter,
   TimeRange,
   VariableHide,
 } from '@grafana/data';
-import { TemplateSrv } from '@grafana/runtime';
+import { config, getBackendSrv, setBackendSrv, TemplateSrv } from '@grafana/runtime';
 
+import { extractResourceMatcher, extractRuleMappingFromGroups, PrometheusDatasource } from './datasource';
+import { prometheusRegularEscape, prometheusSpecialRegexEscape } from './escaping';
+import { PrometheusLanguageProviderInterface } from './language_provider';
+import { CacheRequestInfo } from './querycache/QueryCache';
 import {
-  alignRange,
-  extractRuleMappingFromGroups,
-  PrometheusDatasource,
-  prometheusRegularEscape,
-  prometheusSpecialRegexEscape,
-} from './datasource';
-import PromQlLanguageProvider from './language_provider';
-import { PromApplication, PrometheusCacheLevel, PromOptions, PromQuery, PromQueryRequest } from './types';
+  createDataRequest,
+  createDefaultPromResponse,
+  fetchMockCalledWith,
+  getMockTimeRange,
+} from './test/mocks/datasource';
+import {
+  PromApplication,
+  PrometheusCacheLevel,
+  PromOptions,
+  PromQuery,
+  PromQueryRequest,
+  RawRecordingRules,
+} from './types';
 
 const fetchMock = jest.fn().mockReturnValue(of(createDefaultPromResponse()));
 
 jest.mock('./metric_find_query');
-jest.mock('@grafana/runtime', () => ({
-  ...jest.requireActual('@grafana/runtime'),
-  getBackendSrv: () => ({
-    fetch: fetchMock,
-  }),
-}));
+const origBackendSrv = getBackendSrv();
+setBackendSrv({
+  ...origBackendSrv,
+  fetch: fetchMock,
+});
 
 const replaceMock = jest.fn().mockImplementation((a: string, ...rest: unknown[]) => a);
 
@@ -110,7 +118,6 @@ describe('PrometheusDatasource', () => {
           prometheusType: PromApplication.Prometheus,
         },
       } as unknown as DataSourceInstanceSettings<PromOptions>;
-      const range = { from: time({ seconds: 63 }), to: time({ seconds: 183 }) };
       const directDs = new PrometheusDatasource(instanceSettings, templateSrvStub);
 
       await expect(
@@ -129,37 +136,6 @@ describe('PrometheusDatasource', () => {
           )
         )
       ).rejects.toMatchObject({ message: expect.stringMatching('Browser access') });
-
-      // Cannot test because some other tests need "./metric_find_query" to be mocked and that prevents this to be
-      // tested. Checked manually that this ends up with throwing
-      // await expect(directDs.metricFindQuery('label_names(foo)')).rejects.toBeDefined();
-
-      await expect(
-        directDs.annotationQuery({
-          range: { ...range, raw: range },
-          rangeRaw: range,
-          // Should be DataModel but cannot import that here from the main app. Needs to be moved to package first.
-          dashboard: {},
-          annotation: {
-            expr: 'metric',
-            name: 'test',
-            enable: true,
-            iconColor: '',
-          },
-        })
-      ).rejects.toMatchObject({
-        message: expect.stringMatching('Browser access'),
-      });
-
-      const errorMock = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await directDs.getTagKeys({ filters: [] });
-      // Language provider currently catches and just logs the error
-      expect(errorMock).toHaveBeenCalledTimes(1);
-
-      await expect(directDs.getTagValues({ filters: [], key: 'A' })).rejects.toMatchObject({
-        message: expect.stringMatching('Browser access'),
-      });
     });
   });
 
@@ -229,60 +205,118 @@ describe('PrometheusDatasource', () => {
     const DEFAULT_QUERY_EXPRESSION = 'metric{job="foo"} - metric';
     const target: PromQuery = { expr: DEFAULT_QUERY_EXPRESSION, refId: 'A' };
 
-    it('should not modify expression with no filters', () => {
-      const result = ds.createQuery(
-        target,
-        { interval: '15s', range: getMockTimeRange() } as DataQueryRequest<PromQuery>,
-        0,
-        0
-      );
-      expect(result).toMatchObject({ expr: DEFAULT_QUERY_EXPRESSION });
+    describe('with prometheusSpecialCharsInLabelValues disabled', () => {
+      beforeAll(() => {
+        config.featureToggles.prometheusSpecialCharsInLabelValues = false;
+      });
+
+      it('should not modify expression with no filters', async () => {
+        ds.query({
+          interval: '15s',
+          range: getMockTimeRange(),
+          targets: [target],
+        } as DataQueryRequest<PromQuery>);
+        const [result] = fetchMockCalledWith(fetchMock);
+        expect(result).toMatchObject({ expr: DEFAULT_QUERY_EXPRESSION });
+      });
+
+      it('should add filters to expression', () => {
+        const filters = [
+          {
+            key: 'k1',
+            operator: '=',
+            value: 'v1',
+          },
+          {
+            key: 'k2',
+            operator: '!=',
+            value: 'v2',
+          },
+        ];
+        ds.query({
+          interval: '15s',
+          range: getMockTimeRange(),
+          filters,
+          targets: [target],
+        } as DataQueryRequest<PromQuery>);
+        const [result] = fetchMockCalledWith(fetchMock);
+        expect(result).toMatchObject({ expr: 'metric{job="foo", k1="v1", k2!="v2"} - metric{k1="v1", k2!="v2"}' });
+      });
+
+      it('should add escaping if needed to regex filter expressions', () => {
+        const filters = [
+          {
+            key: 'k1',
+            operator: '=~',
+            value: 'v.*',
+          },
+          {
+            key: 'k2',
+            operator: '=~',
+            value: `v'.*`,
+          },
+        ];
+        ds.query({
+          interval: '15s',
+          range: getMockTimeRange(),
+          filters,
+          targets: [target],
+        } as DataQueryRequest<PromQuery>);
+        const [result] = fetchMockCalledWith(fetchMock);
+        expect(result).toMatchObject({
+          expr: `metric{job="foo", k1=~"v.*", k2=~"v\\\\'.*"} - metric{k1=~"v.*", k2=~"v\\\\'.*"}`,
+        });
+      });
     });
 
-    it('should add filters to expression', () => {
-      const filters = [
-        {
-          key: 'k1',
-          operator: '=',
-          value: 'v1',
-        },
-        {
-          key: 'k2',
-          operator: '!=',
-          value: 'v2',
-        },
-      ];
-      const result = ds.createQuery(
-        target,
-        { interval: '15s', range: getMockTimeRange(), filters } as DataQueryRequest<PromQuery>,
-        0,
-        0
-      );
-      expect(result).toMatchObject({ expr: 'metric{job="foo", k1="v1", k2!="v2"} - metric{k1="v1", k2!="v2"}' });
-    });
+    describe('with prometheusSpecialCharsInLabelValues enabled', () => {
+      beforeAll(() => {
+        config.featureToggles.prometheusSpecialCharsInLabelValues = true;
+      });
 
-    it('should add escaping if needed to regex filter expressions', () => {
-      const filters = [
-        {
-          key: 'k1',
-          operator: '=~',
-          value: 'v.*',
-        },
-        {
-          key: 'k2',
-          operator: '=~',
-          value: `v'.*`,
-        },
-      ];
+      it('should not modify expression with no filters', async () => {
+        ds.query({
+          interval: '15s',
+          range: getMockTimeRange(),
+          targets: [target],
+        } as DataQueryRequest<PromQuery>);
+        const [result] = fetchMockCalledWith(fetchMock);
+        expect(result).toMatchObject({ expr: DEFAULT_QUERY_EXPRESSION });
+      });
 
-      const result = ds.createQuery(
-        target,
-        { interval: '15s', range: getMockTimeRange(), filters } as DataQueryRequest<PromQuery>,
-        0,
-        0
-      );
-      expect(result).toMatchObject({
-        expr: `metric{job="foo", k1=~"v.*", k2=~"v\\\\'.*"} - metric{k1=~"v.*", k2=~"v\\\\'.*"}`,
+      it('should add escaping if needed to regex filter expressions', () => {
+        const filters = [
+          {
+            key: 'k1',
+            operator: '=~',
+            value: 'v.*',
+          },
+          {
+            key: 'k2',
+            operator: '=~',
+            value: `v'.*`,
+          },
+          {
+            key: 'k3',
+            operator: '=~',
+            value: `v".*`,
+          },
+          {
+            key: 'k4',
+            operator: '=~',
+            value: `\\v.*`,
+          },
+        ];
+        ds.query({
+          interval: '15s',
+          range: getMockTimeRange(),
+          filters,
+          targets: [target],
+        } as DataQueryRequest<PromQuery>);
+        const [result] = fetchMockCalledWith(fetchMock);
+        expect(result).toMatchObject({
+          expr: `metric{job="foo", k1=~"v.*", k2=~"v'.*", k3=~"v\\".*", k4=~"\\\\v.*"} - metric{k1=~"v.*", k2=~"v'.*", k3=~"v\\".*", k4=~"\\\\v.*"}`,
+        });
       });
     });
   });
@@ -340,53 +374,13 @@ describe('PrometheusDatasource', () => {
     });
   });
 
-  describe('alignRange', () => {
-    it('does not modify already aligned intervals with perfect step', () => {
-      const range = alignRange(0, 3, 3, 0);
-      expect(range.start).toEqual(0);
-      expect(range.end).toEqual(3);
-    });
-
-    it('does modify end-aligned intervals to reflect number of steps possible', () => {
-      const range = alignRange(1, 6, 3, 0);
-      expect(range.start).toEqual(0);
-      expect(range.end).toEqual(6);
-    });
-
-    it('does align intervals that are a multiple of steps', () => {
-      const range = alignRange(1, 4, 3, 0);
-      expect(range.start).toEqual(0);
-      expect(range.end).toEqual(3);
-    });
-
-    it('does align intervals that are not a multiple of steps', () => {
-      const range = alignRange(1, 5, 3, 0);
-      expect(range.start).toEqual(0);
-      expect(range.end).toEqual(3);
-    });
-
-    it('does align intervals with local midnight -UTC offset', () => {
-      //week range, location 4+ hours UTC offset, 24h step time
-      const range = alignRange(4 * 60 * 60, (7 * 24 + 4) * 60 * 60, 24 * 60 * 60, -4 * 60 * 60); //04:00 UTC, 7 day range
-      expect(range.start).toEqual(4 * 60 * 60);
-      expect(range.end).toEqual((7 * 24 + 4) * 60 * 60);
-    });
-
-    it('does align intervals with local midnight +UTC offset', () => {
-      //week range, location 4- hours UTC offset, 24h step time
-      const range = alignRange(20 * 60 * 60, (8 * 24 - 4) * 60 * 60, 24 * 60 * 60, 4 * 60 * 60); //20:00 UTC on day1, 7 days later is 20:00 on day8
-      expect(range.start).toEqual(20 * 60 * 60);
-      expect(range.end).toEqual((8 * 24 - 4) * 60 * 60);
-    });
-  });
-
   describe('extractRuleMappingFromGroups()', () => {
     it('returns empty mapping for no rule groups', () => {
       expect(extractRuleMappingFromGroups([])).toEqual({});
     });
 
     it('returns a mapping for recording rules only', () => {
-      const groups = [
+      const groups: RawRecordingRules[] = [
         {
           rules: [
             {
@@ -406,61 +400,174 @@ describe('PrometheusDatasource', () => {
         },
       ];
       const mapping = extractRuleMappingFromGroups(groups);
-      expect(mapping).toEqual({ 'job:http_inprogress_requests:sum': 'sum(http_inprogress_requests) by (job)' });
+      expect(mapping).toEqual({
+        'job:http_inprogress_requests:sum': [{ query: 'sum(http_inprogress_requests) by (job)' }],
+      });
+    });
+
+    it('should extract rules with same name respecting its labels', () => {
+      const groups: RawRecordingRules[] = [
+        {
+          name: 'nameOfTheGroup:uid11',
+          file: 'the_file_123',
+          rules: [
+            {
+              name: 'metric_5m',
+              query: 'super_duper_query',
+              labels: {
+                uuid: 'uuid111',
+              },
+              type: 'recording',
+            },
+          ],
+        },
+        {
+          name: 'nameOfTheGroup:uid22',
+          file: 'the_file_456',
+          rules: [
+            {
+              name: 'metric_5m',
+              query: 'another_super_duper_query',
+              labels: {
+                uuid: 'uuid222',
+              },
+              type: 'recording',
+            },
+          ],
+        },
+      ];
+
+      const mapping = extractRuleMappingFromGroups(groups);
+      expect(mapping['metric_5m']).toBeDefined();
+      expect(mapping['metric_5m'].length).toEqual(2);
+      expect(mapping['metric_5m'][0].query).toEqual('super_duper_query');
+      expect(mapping['metric_5m'][0].labels).toEqual({ uuid: 'uuid111' });
+      expect(mapping['metric_5m'][1].query).toEqual('another_super_duper_query');
+      expect(mapping['metric_5m'][1].labels).toEqual({ uuid: 'uuid222' });
     });
   });
 
   describe('Prometheus regular escaping', () => {
-    it('should not escape non-string', () => {
-      expect(prometheusRegularEscape(12)).toEqual(12);
+    describe('with prometheusSpecialCharsInLabelValues disabled', () => {
+      beforeAll(() => {
+        config.featureToggles.prometheusSpecialCharsInLabelValues = false;
+      });
+
+      it('should not escape non-string', () => {
+        expect(prometheusRegularEscape(12)).toEqual(12);
+      });
+
+      it('should not escape strings without special characters', () => {
+        expect(prometheusRegularEscape('cryptodepression')).toEqual('cryptodepression');
+      });
+
+      it('should escape single quotes', () => {
+        expect(prometheusRegularEscape("looking'glass")).toEqual("looking\\\\'glass");
+      });
+
+      it('should escape backslashes', () => {
+        expect(prometheusRegularEscape('looking\\glass')).toEqual('looking\\\\glass');
+      });
     });
 
-    it('should not escape simple string', () => {
-      expect(prometheusRegularEscape('cryptodepression')).toEqual('cryptodepression');
-    });
+    describe('with prometheusSpecialCharsInLabelValues enabled', () => {
+      beforeAll(() => {
+        config.featureToggles.prometheusSpecialCharsInLabelValues = true;
+      });
 
-    it("should escape '", () => {
-      expect(prometheusRegularEscape("looking'glass")).toEqual("looking\\\\'glass");
-    });
+      it('should not escape non-string', () => {
+        expect(prometheusRegularEscape(12)).toEqual(12);
+      });
 
-    it('should escape \\', () => {
-      expect(prometheusRegularEscape('looking\\glass')).toEqual('looking\\\\glass');
-    });
+      it('should not escape strings without special characters', () => {
+        expect(prometheusRegularEscape('cryptodepression')).toEqual('cryptodepression');
+      });
 
-    it('should escape multiple characters', () => {
-      expect(prometheusRegularEscape("'looking'glass'")).toEqual("\\\\'looking\\\\'glass\\\\'");
-    });
+      it('should not escape complete label matcher', () => {
+        expect(prometheusRegularEscape('job="grafana"')).toEqual('job="grafana"');
+        expect(prometheusRegularEscape('job!="grafana"')).toEqual('job!="grafana"');
+        expect(prometheusRegularEscape('job=~"grafana"')).toEqual('job=~"grafana"');
+        expect(prometheusRegularEscape('job!~"grafana"')).toEqual('job!~"grafana"');
+      });
 
-    it('should escape multiple different characters', () => {
-      expect(prometheusRegularEscape("'loo\\king'glass'")).toEqual("\\\\'loo\\\\king\\\\'glass\\\\'");
+      it('should not escape single quotes', () => {
+        expect(prometheusRegularEscape("looking'glass")).toEqual("looking'glass");
+      });
+
+      it('should escape double quotes', () => {
+        expect(prometheusRegularEscape('looking"glass')).toEqual('looking\\"glass');
+      });
+
+      it('should escape backslashes', () => {
+        expect(prometheusRegularEscape('looking\\glass')).toEqual('looking\\\\glass');
+      });
+
+      it('should handle complete label matchers with escaped content', () => {
+        expect(prometheusRegularEscape('job="my\\"service"')).toEqual('job="my\\"service"');
+        expect(prometheusRegularEscape('job="\\\\server"')).toEqual('job="\\\\server"');
+      });
     });
   });
 
   describe('Prometheus regexes escaping', () => {
-    it('should not escape simple string', () => {
-      expect(prometheusSpecialRegexEscape('cryptodepression')).toEqual('cryptodepression');
+    describe('with prometheusSpecialCharsInLabelValues disabled', () => {
+      beforeAll(() => {
+        config.featureToggles.prometheusSpecialCharsInLabelValues = false;
+      });
+
+      it('should not escape strings without special characters', () => {
+        expect(prometheusSpecialRegexEscape('cryptodepression')).toEqual('cryptodepression');
+      });
+
+      it('should escape special characters', () => {
+        expect(prometheusSpecialRegexEscape('looking{glass')).toEqual('looking\\\\{glass');
+        expect(prometheusSpecialRegexEscape('looking$glass')).toEqual('looking\\\\$glass');
+        expect(prometheusSpecialRegexEscape('looking\\glass')).toEqual('looking\\\\\\\\glass');
+        expect(prometheusSpecialRegexEscape('looking|glass')).toEqual('looking\\\\|glass');
+      });
+
+      it('should handle multiple special characters', () => {
+        expect(prometheusSpecialRegexEscape('+looking$glass?')).toEqual('\\\\+looking\\\\$glass\\\\?');
+      });
     });
 
-    it('should escape $^*+?.()|\\', () => {
-      expect(prometheusSpecialRegexEscape("looking'glass")).toEqual("looking\\\\'glass");
-      expect(prometheusSpecialRegexEscape('looking{glass')).toEqual('looking\\\\{glass');
-      expect(prometheusSpecialRegexEscape('looking}glass')).toEqual('looking\\\\}glass');
-      expect(prometheusSpecialRegexEscape('looking[glass')).toEqual('looking\\\\[glass');
-      expect(prometheusSpecialRegexEscape('looking]glass')).toEqual('looking\\\\]glass');
-      expect(prometheusSpecialRegexEscape('looking$glass')).toEqual('looking\\\\$glass');
-      expect(prometheusSpecialRegexEscape('looking^glass')).toEqual('looking\\\\^glass');
-      expect(prometheusSpecialRegexEscape('looking*glass')).toEqual('looking\\\\*glass');
-      expect(prometheusSpecialRegexEscape('looking+glass')).toEqual('looking\\\\+glass');
-      expect(prometheusSpecialRegexEscape('looking?glass')).toEqual('looking\\\\?glass');
-      expect(prometheusSpecialRegexEscape('looking.glass')).toEqual('looking\\\\.glass');
-      expect(prometheusSpecialRegexEscape('looking(glass')).toEqual('looking\\\\(glass');
-      expect(prometheusSpecialRegexEscape('looking)glass')).toEqual('looking\\\\)glass');
-      expect(prometheusSpecialRegexEscape('looking\\glass')).toEqual('looking\\\\\\\\glass');
-      expect(prometheusSpecialRegexEscape('looking|glass')).toEqual('looking\\\\|glass');
-    });
+    describe('with prometheusSpecialCharsInLabelValues enabled', () => {
+      beforeAll(() => {
+        config.featureToggles.prometheusSpecialCharsInLabelValues = true;
+      });
 
-    it('should escape multiple special characters', () => {
-      expect(prometheusSpecialRegexEscape('+looking$glass?')).toEqual('\\\\+looking\\\\$glass\\\\?');
+      it('should not escape strings without special characters', () => {
+        expect(prometheusSpecialRegexEscape('cryptodepression')).toEqual('cryptodepression');
+      });
+
+      it('should escape special characters', () => {
+        expect(prometheusSpecialRegexEscape('looking{glass')).toEqual('looking\\\\{glass');
+        expect(prometheusSpecialRegexEscape('looking}glass')).toEqual('looking\\\\}glass');
+        expect(prometheusSpecialRegexEscape('looking[glass')).toEqual('looking\\\\[glass');
+        expect(prometheusSpecialRegexEscape('looking]glass')).toEqual('looking\\\\]glass');
+        expect(prometheusSpecialRegexEscape('looking$glass')).toEqual('looking\\\\$glass');
+        expect(prometheusSpecialRegexEscape('looking^glass')).toEqual('looking\\\\^glass');
+        expect(prometheusSpecialRegexEscape('looking*glass')).toEqual('looking\\\\*glass');
+        expect(prometheusSpecialRegexEscape('looking+glass')).toEqual('looking\\\\+glass');
+        expect(prometheusSpecialRegexEscape('looking?glass')).toEqual('looking\\\\?glass');
+        expect(prometheusSpecialRegexEscape('looking.glass')).toEqual('looking\\\\.glass');
+        expect(prometheusSpecialRegexEscape('looking(glass')).toEqual('looking\\\\(glass');
+        expect(prometheusSpecialRegexEscape('looking)glass')).toEqual('looking\\\\)glass');
+        expect(prometheusSpecialRegexEscape('looking\\glass')).toEqual('looking\\\\\\\\glass');
+        expect(prometheusSpecialRegexEscape('looking|glass')).toEqual('looking\\\\|glass');
+      });
+
+      it('should escape double quotes with special regex escaping', () => {
+        expect(prometheusSpecialRegexEscape('looking"glass')).toEqual('looking\\\\\\"glass');
+      });
+
+      it('should handle multiple special characters', () => {
+        expect(prometheusSpecialRegexEscape('+looking$glass?')).toEqual('\\\\+looking\\\\$glass\\\\?');
+      });
+
+      it('should handle mixed quotes and special characters', () => {
+        expect(prometheusSpecialRegexEscape('+looking"$glass?')).toEqual('\\\\+looking\\\\\\"\\\\$glass\\\\?');
+      });
     });
   });
 
@@ -489,9 +596,27 @@ describe('PrometheusDatasource', () => {
       };
     });
 
-    describe('and value is a string', () => {
-      it('should only escape single quotes', () => {
-        expect(ds.interpolateQueryExpr("abc'$^*{}[]+?.()|", customVariable)).toEqual("abc\\\\'$^*{}[]+?.()|");
+    describe('with prometheusSpecialCharsInLabelValues disabled', () => {
+      beforeAll(() => {
+        config.featureToggles.prometheusSpecialCharsInLabelValues = false;
+      });
+
+      describe('and value is a string', () => {
+        it('should escape single quotes', () => {
+          expect(ds.interpolateQueryExpr("abc'$^*{}[]+?.()|", customVariable)).toEqual("abc\\\\'$^*{}[]+?.()|");
+        });
+      });
+    });
+
+    describe('with prometheusSpecialCharsInLabelValues enabled', () => {
+      beforeAll(() => {
+        config.featureToggles.prometheusSpecialCharsInLabelValues = true;
+      });
+
+      describe('and value is a string', () => {
+        it('should only escape double quotes and backslashes', () => {
+          expect(ds.interpolateQueryExpr('abc\'"$^*{}[]+?.()|\\', customVariable)).toEqual('abc\'\\"$^*{}[]+?.()|\\\\');
+        });
       });
     });
 
@@ -539,7 +664,11 @@ describe('PrometheusDatasource', () => {
   });
 
   describe('interpolateVariablesInQueries', () => {
-    it('should call replace function 2 times', () => {
+    afterEach(() => {
+      config.featureToggles.promQLScope = undefined;
+    });
+
+    it('should call replace function 3 times', () => {
       const query: PromQuery = {
         expr: 'test{job="testjob"}',
         format: 'time_series',
@@ -550,7 +679,7 @@ describe('PrometheusDatasource', () => {
       replaceMock.mockReturnValue(interval);
 
       const queries = ds.interpolateVariablesInQueries([query], { Interval: { text: interval, value: interval } });
-      expect(templateSrvStub.replace).toBeCalledTimes(2);
+      expect(templateSrvStub.replace).toBeCalledTimes(3);
       expect(queries[0].interval).toBe(interval);
     });
 
@@ -565,11 +694,30 @@ describe('PrometheusDatasource', () => {
       ds.interpolateVariablesInQueries(queries, {});
       expect(ds.enhanceExprWithAdHocFilters).toHaveBeenCalled();
     });
+
+    it('should not apply adhoc filters when promQLScope is enabled', () => {
+      config.featureToggles.promQLScope = true;
+      ds.enhanceExprWithAdHocFilters = jest.fn();
+      ds.generateScopeFilters = jest.fn();
+      const queries = [
+        {
+          refId: 'A',
+          expr: 'rate({bar="baz", job="foo"} [5m]',
+        },
+      ];
+      ds.interpolateVariablesInQueries(queries, {});
+      expect(ds.enhanceExprWithAdHocFilters).not.toHaveBeenCalled();
+      expect(ds.generateScopeFilters).toHaveBeenCalled();
+    });
   });
 
   describe('applyTemplateVariables', () => {
     afterAll(() => {
       replaceMock.mockImplementation((a: string, ...rest: unknown[]) => a);
+    });
+
+    afterEach(() => {
+      config.featureToggles.promQLScope = false;
     });
 
     it('should call replace function for legendFormat', () => {
@@ -634,6 +782,45 @@ describe('PrometheusDatasource', () => {
       expect(result).toMatchObject({ expr: 'test{job="bar", k1="v1", k2!="v2"}' });
     });
 
+    it('should generate scope filters and **not** apply ad-hoc filters to expr', () => {
+      config.featureToggles.promQLScope = true;
+      replaceMock.mockImplementation((a: string) => a);
+      const filters = [
+        {
+          key: 'k1',
+          operator: '=',
+          value: 'v1',
+        },
+        {
+          key: 'k2',
+          operator: '!=',
+          value: 'v2',
+        },
+      ];
+
+      const query = {
+        expr: 'test{job="bar"}',
+        refId: 'A',
+      };
+
+      const expectedScopeFilters: ScopeSpecFilter[] = [
+        {
+          key: 'k1',
+          operator: 'equals',
+          value: 'v1',
+        },
+        {
+          key: 'k2',
+          operator: 'not-equals',
+          value: 'v2',
+        },
+      ];
+
+      const result = ds.applyTemplateVariables(query, {}, filters);
+      expect(result.expr).toBe('test{job="bar"}');
+      expect(result.adhocFilters).toEqual(expectedScopeFilters);
+    });
+
     it('should add ad-hoc filters only to expr', () => {
       replaceMock.mockImplementation((a: string) => a?.replace('$A', '99') ?? a);
       const filters = [
@@ -682,6 +869,55 @@ describe('PrometheusDatasource', () => {
       const result = ds.applyTemplateVariables(query, {}, filters);
       expect(result).toMatchObject({ expr: 'test{job="99", k1="v1", k2!="v2"} > 99' });
     });
+
+    it('should replace variables in ad-hoc filters', () => {
+      const searchPattern = /\$A/g;
+      replaceMock.mockImplementation((a: string) => a?.replace(searchPattern, '99') ?? a);
+
+      const query = {
+        expr: 'test',
+        refId: 'A',
+      };
+      const filters = [
+        {
+          key: 'job',
+          operator: '=~',
+          value: '$A',
+        },
+      ];
+
+      const result = ds.applyTemplateVariables(query, {}, filters);
+      expect(result).toMatchObject({ expr: 'test{job=~"99"}' });
+    });
+
+    it('should replace variables in adhoc filters on backend when promQLScope is enabled', () => {
+      config.featureToggles.promQLScope = true;
+      const searchPattern = /\$A/g;
+      replaceMock.mockImplementation((a: string) => a?.replace(searchPattern, '99') ?? a);
+
+      const query = {
+        expr: 'test',
+        refId: 'A',
+      };
+      const filters = [
+        {
+          key: 'job',
+          operator: '=~',
+          value: '$A',
+        },
+      ];
+      const result = ds.applyTemplateVariables(query, {}, filters);
+      expect(result).toMatchObject({
+        expr: 'test',
+        adhocFilters: [
+          {
+            key: 'job',
+            operator: 'regex-match',
+            value: '99',
+          },
+        ],
+      });
+    });
   });
 
   describe('metricFindQuery', () => {
@@ -713,14 +949,118 @@ describe('PrometheusDatasource', () => {
       expect(interval).toEqual({ text: '15s', value: '15s' });
       expect(intervalMs).toEqual({ text: 15000, value: 15000 });
     });
+
+    it('should use the default time range when no range provided in options', () => {
+      const prometheusDatasource = new PrometheusDatasource(
+        { ...instanceSettings, jsonData: { ...instanceSettings.jsonData, cacheLevel: PrometheusCacheLevel.None } },
+        templateSrvStub
+      );
+      const query = 'query_result(topk(5,rate(http_request_duration_microseconds_count[$__interval])))';
+      prometheusDatasource.metricFindQuery(query);
+
+      // Last 6h
+      const range = replaceMock.mock.calls[1][1].__range;
+      const rangeMs = replaceMock.mock.calls[1][1].__range_ms;
+      const rangeS = replaceMock.mock.calls[1][1].__range_s;
+      expect(range).toEqual({ text: '21600s', value: '21600s' });
+      expect(rangeMs).toEqual({ text: 21600000, value: 21600000 });
+      expect(rangeS).toEqual({ text: 21600, value: 21600 });
+    });
+  });
+
+  describe('extractResourceMatcher', () => {
+    it('should extract matcher from given query and filters', () => {
+      const queries: PromQuery[] = [
+        {
+          refId: 'A',
+          expr: 'metric_name{job="testjob"}',
+        },
+      ];
+      const filters: AdHocVariableFilter[] = [
+        {
+          key: 'instance',
+          operator: '=',
+          value: 'localhost',
+        },
+      ];
+
+      const result = extractResourceMatcher(queries, filters);
+      expect(result).toBe('{__name__=~"metric_name",instance="localhost"}');
+    });
+
+    it('should extract matcher from given query and empty filters', () => {
+      const queries: PromQuery[] = [
+        {
+          refId: 'A',
+          expr: 'metric_name{job="testjob"}',
+        },
+      ];
+      const filters: AdHocVariableFilter[] = [];
+
+      const result = extractResourceMatcher(queries, filters);
+      expect(result).toBe('{__name__=~"metric_name"}');
+    });
+
+    it('should extract matcher from given empty query expr and filters', () => {
+      const queries: PromQuery[] = [
+        {
+          refId: 'A',
+          expr: '',
+        },
+      ];
+      const filters: AdHocVariableFilter[] = [
+        {
+          key: 'instance',
+          operator: '=',
+          value: 'localhost',
+        },
+      ];
+
+      const result = extractResourceMatcher(queries, filters);
+      expect(result).toBe('{instance="localhost"}');
+    });
+
+    it('should extract matcher from given filters only', () => {
+      const queries: PromQuery[] = [];
+      const filters: AdHocVariableFilter[] = [
+        {
+          key: 'instance',
+          operator: '=',
+          value: 'localhost',
+        },
+        {
+          key: 'job',
+          operator: '!=',
+          value: 'testjob',
+        },
+      ];
+
+      const result = extractResourceMatcher(queries, filters);
+      expect(result).toBe('{instance="localhost",job!="testjob"}');
+    });
+
+    it('should extract matcher as match-all from no query and filter', () => {
+      const queries: PromQuery[] = [];
+      const filters: AdHocVariableFilter[] = [];
+
+      const result = extractResourceMatcher(queries, filters);
+      expect(result).toBeUndefined();
+    });
+
+    it('should extract the correct matcher for queries with `... or vector(0)`', () => {
+      const queries: PromQuery[] = [
+        {
+          refId: 'A',
+          expr: `sum(increase(go_cpu_classes_idle_cpu_seconds_total[$__rate_interval])) or vector(0)`,
+        },
+      ];
+      const filters: AdHocVariableFilter[] = [];
+
+      const result = extractResourceMatcher(queries, filters);
+      expect(result).toBe('{__name__=~"go_cpu_classes_idle_cpu_seconds_total"}');
+    });
   });
 });
-
-const SECOND = 1000;
-const MINUTE = 60 * SECOND;
-const HOUR = 60 * MINUTE;
-
-const time = ({ hours = 0, seconds = 0, minutes = 0 }) => dateTime(hours * HOUR + minutes * MINUTE + seconds * SECOND);
 
 describe('PrometheusDatasource2', () => {
   const instanceSettings = {
@@ -737,305 +1077,6 @@ describe('PrometheusDatasource2', () => {
     ds = new PrometheusDatasource(instanceSettings, templateSrvStub);
   });
 
-  describe('annotationQuery', () => {
-    let results: AnnotationEvent[];
-    const options = {
-      annotation: {
-        expr: 'ALERTS{alertstate="firing"}',
-        tagKeys: 'job',
-        titleFormat: '{{alertname}}',
-        textFormat: '{{instance}}',
-      },
-      range: {
-        from: time({ seconds: 63 }),
-        to: time({ seconds: 123 }),
-      },
-    } as unknown as AnnotationQueryRequest<PromQuery>;
-
-    const response = createAnnotationResponse();
-    const emptyResponse = createEmptyAnnotationResponse();
-
-    describe('handle result with empty fields', () => {
-      it('should return empty results', async () => {
-        fetchMock.mockImplementation(() => of(emptyResponse));
-
-        await ds.annotationQuery(options).then((data) => {
-          results = data;
-        });
-
-        expect(results.length).toBe(0);
-      });
-    });
-
-    describe('when time series query is cancelled', () => {
-      it('should return empty results', async () => {
-        fetchMock.mockImplementation(() => of({ cancelled: true }));
-
-        await ds.annotationQuery(options).then((data) => {
-          results = data;
-        });
-
-        expect(results).toEqual([]);
-      });
-    });
-
-    describe('not use useValueForTime', () => {
-      beforeEach(async () => {
-        options.annotation.useValueForTime = false;
-        fetchMock.mockImplementation(() => of(response));
-
-        await ds.annotationQuery(options).then((data) => {
-          results = data;
-        });
-      });
-
-      it('should return annotation list', () => {
-        expect(results.length).toBe(1);
-        expect(results[0].tags).toContain('testjob');
-        expect(results[0].title).toBe('InstanceDown');
-        expect(results[0].text).toBe('testinstance');
-        expect(results[0].time).toBe(123);
-      });
-    });
-
-    describe('use useValueForTime', () => {
-      beforeEach(async () => {
-        options.annotation.useValueForTime = true;
-        fetchMock.mockImplementation(() => of(response));
-
-        await ds.annotationQuery(options).then((data) => {
-          results = data;
-        });
-      });
-
-      it('should return annotation list', () => {
-        expect(results[0].time).toEqual(456);
-      });
-    });
-
-    describe('step parameter', () => {
-      beforeEach(() => {
-        fetchMock.mockImplementation(() => of(response));
-      });
-
-      it('should use default step for short range if no interval is given', () => {
-        const query = {
-          ...options,
-          range: {
-            from: time({ seconds: 63 }),
-            to: time({ seconds: 123 }),
-          },
-        } as AnnotationQueryRequest<PromQuery>;
-        ds.annotationQuery(query);
-        const req = fetchMock.mock.calls[0][0];
-        expect(req.data.queries[0].interval).toBe('60s');
-      });
-
-      it('should use default step for short range when annotation step is empty string', () => {
-        const query = {
-          ...options,
-          annotation: {
-            ...options.annotation,
-            step: '',
-          },
-          range: {
-            from: time({ seconds: 63 }),
-            to: time({ seconds: 123 }),
-          },
-        } as unknown as AnnotationQueryRequest<PromQuery>;
-        ds.annotationQuery(query);
-        const req = fetchMock.mock.calls[0][0];
-        expect(req.data.queries[0].interval).toBe('60s');
-      });
-
-      it('should use custom step for short range', () => {
-        const annotation = {
-          ...options.annotation,
-          step: '10s',
-        };
-        const query = {
-          ...options,
-          annotation,
-          range: {
-            from: time({ seconds: 63 }),
-            to: time({ seconds: 123 }),
-          },
-        } as unknown as AnnotationQueryRequest<PromQuery>;
-        ds.annotationQuery(query);
-        const req = fetchMock.mock.calls[0][0];
-        expect(req.data.queries[0].interval).toBe('10s');
-      });
-    });
-
-    describe('region annotations for sectors', () => {
-      const options = {
-        annotation: {
-          expr: 'ALERTS{alertstate="firing"}',
-          tagKeys: 'job',
-          titleFormat: '{{alertname}}',
-          textFormat: '{{instance}}',
-        },
-        range: {
-          from: time({ seconds: 63 }),
-          to: time({ seconds: 900 }),
-        },
-      } as unknown as AnnotationQueryRequest;
-
-      async function runAnnotationQuery(data: number[][]) {
-        let response = createAnnotationResponse();
-        response.data.results['X'].frames[0].data.values = data;
-
-        options.annotation.useValueForTime = false;
-        fetchMock.mockImplementation(() => of(response));
-
-        return ds.annotationQuery(options);
-      }
-
-      it('should handle gaps and inactive values', async () => {
-        const results = await runAnnotationQuery([
-          [2 * 60000, 3 * 60000, 5 * 60000, 6 * 60000, 7 * 60000, 8 * 60000, 9 * 60000],
-          [1, 1, 1, 1, 1, 0, 1],
-        ]);
-        expect(results.map((result) => [result.time, result.timeEnd])).toEqual([
-          [120000, 180000],
-          [300000, 420000],
-          [540000, 540000],
-        ]);
-      });
-
-      it('should handle single region', async () => {
-        const results = await runAnnotationQuery([
-          [2 * 60000, 3 * 60000],
-          [1, 1],
-        ]);
-        expect(results.map((result) => [result.time, result.timeEnd])).toEqual([[120000, 180000]]);
-      });
-
-      it('should handle 0 active regions', async () => {
-        const results = await runAnnotationQuery([
-          [2 * 60000, 3 * 60000, 5 * 60000],
-          [0, 0, 0],
-        ]);
-        expect(results.length).toBe(0);
-      });
-
-      it('should handle single active value', async () => {
-        const results = await runAnnotationQuery([[2 * 60000], [1]]);
-        expect(results.map((result) => [result.time, result.timeEnd])).toEqual([[120000, 120000]]);
-      });
-    });
-
-    describe('with template variables', () => {
-      afterAll(() => {
-        replaceMock.mockImplementation((a: string, ...rest: unknown[]) => a);
-      });
-
-      it('should interpolate variables in query expr', () => {
-        const query = {
-          ...options,
-          annotation: {
-            ...options.annotation,
-            expr: '$variable',
-          },
-          range: {
-            from: time({ seconds: 1 }),
-            to: time({ seconds: 2 }),
-          },
-        } as unknown as AnnotationQueryRequest<PromQuery>;
-        const interpolated = 'interpolated_expr';
-        replaceMock.mockReturnValue(interpolated);
-        ds.annotationQuery(query);
-        const req = fetchMock.mock.calls[0][0];
-        expect(req.data.queries[0].expr).toBe(interpolated);
-      });
-    });
-  });
-
-  describe('The __rate_interval variable', () => {
-    const target = { expr: 'rate(process_cpu_seconds_total[$__rate_interval])', refId: 'A' };
-
-    beforeEach(() => {
-      replaceMock.mockClear();
-    });
-
-    it('should be 4 times the scrape interval if interval + scrape interval is lower', () => {
-      ds.createQuery(target, { interval: '15s', range: getMockTimeRange() } as DataQueryRequest<PromQuery>, 0, 300);
-      expect(replaceMock.mock.calls[1][1]['__rate_interval'].value).toBe('60s');
-    });
-    it('should be interval + scrape interval if 4 times the scrape interval is lower', () => {
-      ds.createQuery(
-        target,
-        {
-          interval: '5m',
-          range: getMockTimeRange(),
-        } as DataQueryRequest<PromQuery>,
-        0,
-        10080
-      );
-      expect(replaceMock.mock.calls[1][1]['__rate_interval'].value).toBe('315s');
-    });
-    it('should fall back to a scrape interval of 15s if min step is set to 0, resulting in 4*15s = 60s', () => {
-      ds.createQuery(
-        { ...target, interval: '' },
-        { interval: '15s', range: getMockTimeRange() } as DataQueryRequest<PromQuery>,
-        0,
-        300
-      );
-      expect(replaceMock.mock.calls[1][1]['__rate_interval'].value).toBe('60s');
-    });
-    it('should be 4 times the scrape interval if min step set to 1m and interval is 15s', () => {
-      // For a 5m graph, $__interval is 15s
-      ds.createQuery(
-        { ...target, interval: '1m' },
-        { interval: '15s', range: getMockTimeRange() } as DataQueryRequest<PromQuery>,
-        0,
-        300
-      );
-      expect(replaceMock.mock.calls[2][1]['__rate_interval'].value).toBe('240s');
-    });
-    it('should be interval + scrape interval if min step set to 1m and interval is 5m', () => {
-      // For a 7d graph, $__interval is 5m
-      ds.createQuery(
-        { ...target, interval: '1m' },
-        { interval: '5m', range: getMockTimeRange() } as DataQueryRequest<PromQuery>,
-        0,
-        10080
-      );
-      expect(replaceMock.mock.calls[2][1]['__rate_interval'].value).toBe('360s');
-    });
-    it('should be interval + scrape interval if resolution is set to 1/2 and interval is 10m', () => {
-      // For a 7d graph, $__interval is 10m
-      ds.createQuery(
-        { ...target, intervalFactor: 2 },
-        { interval: '10m', range: getMockTimeRange() } as DataQueryRequest<PromQuery>,
-        0,
-        10080
-      );
-      expect(replaceMock.mock.calls[1][1]['__rate_interval'].value).toBe('1215s');
-    });
-    it('should be 4 times the scrape interval if resolution is set to 1/2 and interval is 15s', () => {
-      // For a 5m graph, $__interval is 15s
-      ds.createQuery(
-        { ...target, intervalFactor: 2 },
-        { interval: '15s', range: getMockTimeRange() } as DataQueryRequest<PromQuery>,
-        0,
-        300
-      );
-      expect(replaceMock.mock.calls[1][1]['__rate_interval'].value).toBe('60s');
-    });
-    it('should interpolate min step if set', () => {
-      replaceMock.mockImplementation((_: string) => '15s');
-      ds.createQuery(
-        { ...target, interval: '$int' },
-        { interval: '15s', range: getMockTimeRange() } as DataQueryRequest<PromQuery>,
-        0,
-        300
-      );
-      expect(replaceMock.mock.calls).toHaveLength(3);
-      replaceMock.mockImplementation((str) => str);
-    });
-  });
-
   it('should give back 1 exemplar target when multiple queries with exemplar enabled and same metric', () => {
     const targetA: PromQuery = {
       refId: 'A',
@@ -1049,8 +1090,8 @@ describe('PrometheusDatasource2', () => {
     };
 
     ds.languageProvider = {
-      histogramMetrics: ['tns_request_duration_seconds_bucket'],
-    } as PromQlLanguageProvider;
+      retrieveHistogramMetrics: jest.fn().mockReturnValue(['tns_request_duration_seconds_bucket']),
+    } as unknown as PrometheusLanguageProviderInterface;
 
     const request = {
       targets: [targetA, targetB],
@@ -1167,130 +1208,125 @@ describe('modifyQuery', () => {
         expect(result.expr).toEqual('go_goroutines{cluster="us-cluster", pod!="pod-123"}');
       });
     });
+
+    describe('scope filters', () => {
+      const instanceSettings = {
+        access: 'proxy',
+        id: 1,
+        jsonData: {},
+        name: 'scoped-prom',
+        readOnly: false,
+        type: 'prometheus',
+        uid: 'scoped-prom',
+      } as unknown as DataSourceInstanceSettings<PromOptions>;
+      const ds = new PrometheusDatasource(instanceSettings, templateSrvStub);
+
+      it('should convert each adhoc operator to scope operator properly', () => {
+        const adhocFilter: AdHocVariableFilter[] = [
+          { key: 'eq', value: 'eqv', operator: '=' },
+          {
+            key: 'neq',
+            value: 'neqv',
+            operator: '!=',
+          },
+          { key: 'reg', value: 'regv', operator: '=~' },
+          { key: 'nreg', value: 'nregv', operator: '!~' },
+          { key: 'foo', value: 'bar', operator: '=|' },
+          { key: 'bar', value: 'baz', operator: '!=|' },
+        ];
+        const expectedScopeFilter: ScopeSpecFilter[] = [
+          { key: 'eq', value: 'eqv', operator: 'equals' },
+          {
+            key: 'neq',
+            value: 'neqv',
+            operator: 'not-equals',
+          },
+          { key: 'reg', value: 'regv', operator: 'regex-match' },
+          { key: 'nreg', value: 'nregv', operator: 'regex-not-match' },
+          { key: 'foo', value: 'bar', operator: 'one-of' },
+          { key: 'bar', value: 'baz', operator: 'not-one-of' },
+        ];
+        const result = ds.generateScopeFilters(adhocFilter);
+        result.forEach((r, i) => {
+          expect(r).toEqual(expectedScopeFilter[i]);
+        });
+      });
+    });
   });
 });
 
-function createDataRequest(targets: PromQuery[], overrides?: Partial<DataQueryRequest>): DataQueryRequest<PromQuery> {
-  const defaults: DataQueryRequest<PromQuery> = {
-    intervalMs: 15000,
-    requestId: 'createDataRequest',
-    startTime: 0,
-    timezone: 'browser',
-    app: CoreApp.Dashboard,
-    targets: targets.map((t, i) => ({
-      instant: false,
-      start: dateTime().subtract(5, 'minutes'),
-      end: dateTime(),
-      ...t,
-    })),
-    range: {
-      from: dateTime(),
-      to: dateTime(),
-      raw: {
-        from: '',
-        to: '',
-      },
-    },
-    interval: '15s',
-    scopedVars: {},
+describe('PrometheusDatasource incremental query logic', () => {
+  let ds: PrometheusDatasource;
+  let mockCache: {
+    requestInfo: jest.MockedFunction<(request: DataQueryRequest<PromQuery>) => CacheRequestInfo<PromQuery>>;
+    procFrames: jest.MockedFunction<(...args: unknown[]) => unknown[]>;
   };
 
-  return Object.assign(defaults, overrides || {}) as DataQueryRequest<PromQuery>;
-}
+  beforeEach(() => {
+    jest.clearAllMocks();
 
-function createDefaultPromResponse() {
-  return {
-    data: {
-      data: {
-        result: [
-          {
-            metric: {
-              __name__: 'test_metric',
-            },
-            values: [[1568369640, 1]],
-          },
-        ],
-        resultType: 'matrix',
-      },
-    },
-  };
-}
+    mockCache = {
+      requestInfo: jest.fn().mockReturnValue({
+        requests: [{ targets: [], range: getMockTimeRange() }],
+        targetSignatures: new Map(),
+        shouldCache: true,
+      }),
+      procFrames: jest.fn().mockReturnValue([]),
+    };
 
-function createAnnotationResponse() {
-  const response = {
-    data: {
-      results: {
-        X: {
-          frames: [
-            {
-              schema: {
-                name: 'bar',
-                refId: 'X',
-                fields: [
-                  {
-                    name: 'Time',
-                    type: 'time',
-                    typeInfo: {
-                      frame: 'time.Time',
-                    },
-                  },
-                  {
-                    name: 'Value',
-                    type: 'number',
-                    typeInfo: {
-                      frame: 'float64',
-                    },
-                    labels: {
-                      __name__: 'ALERTS',
-                      alertname: 'InstanceDown',
-                      alertstate: 'firing',
-                      instance: 'testinstance',
-                      job: 'testjob',
-                    },
-                  },
-                ],
-              },
-              data: {
-                values: [[123], [456]],
-              },
-            },
-          ],
-        },
-      },
-    },
-  };
+    const incrementalInstanceSettings = {
+      url: 'proxied',
+      id: 1,
+      uid: 'ABCDEF',
+      access: 'proxy',
+      user: 'test',
+      password: 'mupp',
+      jsonData: {
+        customQueryParameters: '',
+        cacheLevel: PrometheusCacheLevel.Low,
+        incrementalQuerying: true,
+      } as Partial<PromOptions>,
+    } as unknown as DataSourceInstanceSettings<PromOptions>;
 
-  return { ...response };
-}
-
-function createEmptyAnnotationResponse() {
-  const response = {
-    data: {
-      results: {
-        X: {
-          frames: [
-            {
-              schema: {
-                name: 'bar',
-                refId: 'X',
-                fields: [],
-              },
-              data: {
-                values: [],
-              },
-            },
-          ],
-        },
-      },
-    },
-  };
-
-  return { ...response };
-}
-
-function getMockTimeRange(range = '6h'): TimeRange {
-  return rangeUtil.convertRawToRange({
-    from: `now-${range}`,
-    to: 'now',
+    ds = new PrometheusDatasource(incrementalInstanceSettings, templateSrvStub);
+    ds.cache = mockCache as unknown as typeof ds.cache;
   });
-}
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('should use incremental query for normal queries when incrementalQuerying is true', async () => {
+    const request = createDataRequest([{ expr: 'up', refId: 'A' }]);
+    await lastValueFrom(ds.query(request));
+    expect(mockCache.requestInfo).toHaveBeenCalled();
+  });
+
+  it('should disable incremental query when query contains $__range', async () => {
+    const request = createDataRequest([{ expr: 'rate(up[$__range])', refId: 'A' }]);
+    await lastValueFrom(ds.query(request));
+    expect(mockCache.requestInfo).not.toHaveBeenCalled();
+  });
+
+  it('should disable incremental query when public dashboards are being used', async () => {
+    config.publicDashboardAccessToken = 'token';
+    const request = createDataRequest([{ expr: 'rate(up[5m])', refId: 'A' }]);
+    await lastValueFrom(ds.query(request));
+    expect(mockCache.requestInfo).not.toHaveBeenCalled();
+  });
+
+  it('should disable incremental query when any target contains $__range', async () => {
+    const request = createDataRequest([
+      { expr: 'up', refId: 'A' },
+      { expr: 'rate(cpu[$__range])', refId: 'B' },
+    ]);
+    await lastValueFrom(ds.query(request));
+    expect(mockCache.requestInfo).not.toHaveBeenCalled();
+  });
+
+  it('should disable incremental query for instant queries', async () => {
+    const request = createDataRequest([{ expr: 'up', refId: 'A', instant: true }]);
+    await lastValueFrom(ds.query(request));
+    expect(mockCache.requestInfo).not.toHaveBeenCalled();
+  });
+});

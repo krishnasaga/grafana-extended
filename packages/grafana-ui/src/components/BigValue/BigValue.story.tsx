@@ -1,9 +1,8 @@
-import { Story, Meta } from '@storybook/react';
-import React from 'react';
+import { StoryFn, Meta } from '@storybook/react';
 
 import { FieldSparkline, FieldType } from '@grafana/data';
 
-import { useTheme2 } from '../../themes';
+import { useTheme2 } from '../../themes/ThemeContext';
 
 import {
   BigValue,
@@ -16,7 +15,7 @@ import {
 import mdx from './BigValue.mdx';
 
 const meta: Meta = {
-  title: 'Visualizations/BigValue',
+  title: 'Plugins/BigValue',
   component: BigValue,
   parameters: {
     docs: {
@@ -57,7 +56,7 @@ interface StoryProps extends Partial<Props> {
   valueText: string;
 }
 
-export const ApplyNoValue: Story<StoryProps> = ({
+export const ApplyNoValue: StoryFn<StoryProps> = ({
   valueText,
   title,
   colorMode,
@@ -101,7 +100,7 @@ export const ApplyNoValue: Story<StoryProps> = ({
   );
 };
 
-export const Basic: Story<StoryProps> = ({
+export const Basic: StoryFn<StoryProps> = ({
   valueText,
   title,
   colorMode,

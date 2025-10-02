@@ -1,16 +1,23 @@
-import { t } from 'i18next';
-import React, { ComponentProps, useCallback, useEffect, useRef, useState } from 'react';
-import { default as ReactSelect, IndicatorsContainerProps, Props as ReactSelectProps } from 'react-select';
+import { isArray, negate } from 'lodash';
+import { ComponentProps, useCallback, useEffect, useRef, useState, useImperativeHandle } from 'react';
+import * as React from 'react';
+import {
+  default as ReactSelect,
+  IndicatorsContainerProps,
+  Props as ReactSelectProps,
+  ClearIndicatorProps,
+} from 'react-select';
 import { default as ReactAsyncSelect } from 'react-select/async';
 import { default as AsyncCreatable } from 'react-select/async-creatable';
 import Creatable from 'react-select/creatable';
 
 import { SelectableValue, toOption } from '@grafana/data';
+import { t, Trans } from '@grafana/i18n';
 
-import { useTheme2 } from '../../themes';
+import { useTheme2 } from '../../themes/ThemeContext';
 import { Icon } from '../Icon/Icon';
-import { Spinner } from '../Spinner/Spinner';
 
+import { CustomInput } from './CustomInput';
 import { DropdownIndicator } from './DropdownIndicator';
 import { IndicatorsContainer } from './IndicatorsContainer';
 import { InputControl } from './InputControl';
@@ -18,11 +25,12 @@ import { MultiValueContainer, MultiValueRemove } from './MultiValue';
 import { SelectContainer } from './SelectContainer';
 import { SelectMenu, SelectMenuOptions, VirtualizedSelectMenu } from './SelectMenu';
 import { SelectOptionGroup } from './SelectOptionGroup';
-import { SingleValue } from './SingleValue';
+import { SelectOptionGroupHeader } from './SelectOptionGroupHeader';
+import { Props, SingleValue } from './SingleValue';
 import { ValueContainer } from './ValueContainer';
 import { getSelectStyles } from './getSelectStyles';
 import { useCustomSelectStyles } from './resetSelectStyles';
-import { ActionMeta, InputActionMeta, SelectBaseProps } from './types';
+import { ActionMeta, InputActionMeta, SelectBaseProps, ToggleAllState } from './types';
 import { cleanValue, findSelectedValue, omitDescriptions } from './utils';
 
 const CustomControl = (props: any) => {
@@ -67,6 +75,16 @@ interface SelectPropsWithExtras extends ReactSelectProps {
   maxVisibleValues?: number | undefined;
   showAllSelectedWhenOpen: boolean;
   noMultiValueWrap?: boolean;
+}
+
+function determineToggleAllState(selectedValue: SelectableValue[], options: SelectableValue[]) {
+  if (options.length === selectedValue.length) {
+    return ToggleAllState.allSelected;
+  } else if (selectedValue.length === 0) {
+    return ToggleAllState.noneSelected;
+  } else {
+    return ToggleAllState.indeterminate;
+  }
 }
 
 export function SelectBase<T, Rest = {}>({
@@ -118,6 +136,7 @@ export function SelectBase<T, Rest = {}>({
   onMenuScrollToTop,
   onOpenMenu,
   onFocus,
+  toggleAllOptions,
   openMenuOnFocus = false,
   options = [],
   placeholder = t('grafana-ui.select.placeholder', 'Choose'),
@@ -132,15 +151,18 @@ export function SelectBase<T, Rest = {}>({
   isValidNewOption,
   formatOptionLabel,
   hideSelectedOptions,
+  selectRef,
   ...rest
 }: SelectBaseProps<T> & Rest) {
   const theme = useTheme2();
   const styles = getSelectStyles(theme);
 
-  const reactSelectRef = useRef<{ controlRef: HTMLElement }>(null);
+  const reactSelectRef = useRef<HTMLElement & { controlRef: HTMLElement }>(null);
   const [closeToBottom, setCloseToBottom] = useState<boolean>(false);
   const selectStyles = useCustomSelectStyles(theme, width);
   const [hasInputValue, setHasInputValue] = useState<boolean>(!!inputValue);
+
+  useImperativeHandle(selectRef, () => reactSelectRef.current!, []);
 
   // Infer the menu position for asynchronously loaded options. menuPlacement="auto" doesn't work when the menu is
   // automatically opened when the component is created (it happens in SegmentSelect by setting menuIsOpen={true}).
@@ -185,7 +207,7 @@ export function SelectBase<T, Rest = {}>({
         const selectableValue = findSelectedValue(v.value ?? v, options);
         // If the select allows custom values there likely won't be a selectableValue in options
         // so we must return a new selectableValue
-        if (!allowCustomValue || selectableValue) {
+        if (selectableValue) {
           return selectableValue;
         }
         return typeof v === 'string' ? toOption(v) : v;
@@ -240,8 +262,13 @@ export function SelectBase<T, Rest = {}>({
     onBlur,
     onChange: onChangeWithEmpty,
     onInputChange: (val: string, actionMeta: InputActionMeta) => {
-      setHasInputValue(!!val);
-      onInputChange?.(val, actionMeta);
+      const newValue = onInputChange?.(val, actionMeta) ?? val;
+      const newHasValue = !!newValue;
+      if (newHasValue !== hasInputValue) {
+        setHasInputValue(newHasValue);
+      }
+
+      return newValue;
     },
     onKeyDown,
     onMenuClose: onCloseMenu,
@@ -262,7 +289,7 @@ export function SelectBase<T, Rest = {}>({
   };
 
   if (allowCustomValue) {
-    ReactSelectComponent = Creatable as any;
+    ReactSelectComponent = Creatable;
     creatableProps.allowCreateWhileLoading = allowCreateWhileLoading;
     creatableProps.formatCreateLabel = formatCreateLabel ?? defaultFormatCreateLabel;
     creatableProps.onCreateOption = onCreateOption;
@@ -272,7 +299,7 @@ export function SelectBase<T, Rest = {}>({
 
   // Instead of having AsyncSelect, as a separate component we render ReactAsyncSelect
   if (loadOptions) {
-    ReactSelectComponent = (allowCustomValue ? AsyncCreatable : ReactAsyncSelect) as any;
+    ReactSelectComponent = allowCustomValue ? AsyncCreatable : ReactAsyncSelect;
     asyncSelectProps = {
       loadOptions,
       cacheOptions,
@@ -282,6 +309,30 @@ export function SelectBase<T, Rest = {}>({
 
   const SelectMenuComponent = virtualized ? VirtualizedSelectMenu : SelectMenu;
 
+  let toggleAllState = ToggleAllState.noneSelected;
+  if (toggleAllOptions?.enabled && isArray(selectedValue)) {
+    if (toggleAllOptions?.determineToggleAllState) {
+      toggleAllState = toggleAllOptions.determineToggleAllState(selectedValue, options);
+    } else {
+      toggleAllState = determineToggleAllState(selectedValue, options);
+    }
+  }
+
+  const toggleAll = useCallback(() => {
+    let toSelect = toggleAllState === ToggleAllState.noneSelected ? options : [];
+    if (toggleAllOptions?.optionsFilter) {
+      toSelect =
+        toggleAllState === ToggleAllState.noneSelected
+          ? options.filter(toggleAllOptions.optionsFilter)
+          : options.filter(negate(toggleAllOptions.optionsFilter));
+    }
+
+    onChange(toSelect, {
+      action: 'select-option',
+      option: {},
+    });
+  }, [options, toggleAllOptions, onChange, toggleAllState]);
+
   return (
     <>
       <ReactSelectComponent
@@ -289,18 +340,19 @@ export function SelectBase<T, Rest = {}>({
         components={{
           MenuList: SelectMenuComponent,
           Group: SelectOptionGroup,
+          GroupHeading: SelectOptionGroupHeader,
           ValueContainer,
           IndicatorsContainer: CustomIndicatorsContainer,
           IndicatorSeparator: IndicatorSeparator,
           Control: CustomControl,
           Option: SelectMenuOptions,
-          ClearIndicator(props: any) {
+          ClearIndicator(props: ClearIndicatorProps) {
             const { clearValue } = props;
             return (
               <Icon
                 name="times"
                 role="button"
-                aria-label="select-clear-value"
+                aria-label={t('grafana-ui.select.clear-value', 'Clear value')}
                 className={styles.singleValueRemove}
                 onMouseDown={(e) => {
                   e.preventDefault();
@@ -311,29 +363,42 @@ export function SelectBase<T, Rest = {}>({
             );
           },
           LoadingIndicator() {
-            return <Spinner inline />;
+            // Handled with DropdownIndicator, to avoid resize flickering with auto width
+            return null;
           },
           LoadingMessage() {
             return <div className={styles.loadingMessage}>{loadingMessage}</div>;
           },
           NoOptionsMessage() {
             return (
-              <div className={styles.loadingMessage} aria-label="No options provided">
+              <div
+                className={styles.loadingMessage}
+                aria-label={t('grafana-ui.select.empty-options', 'No options provided')}
+              >
                 {noOptionsMessage}
               </div>
             );
           },
           DropdownIndicator: DropdownIndicator,
-          SingleValue(props: any) {
+          SingleValue(props: Props<T>) {
             return <SingleValue {...props} isDisabled={disabled} />;
           },
           SelectContainer,
           MultiValueContainer: MultiValueContainer,
           MultiValueRemove: !disabled ? MultiValueRemove : () => null,
+          Input: CustomInput,
           ...components,
         }}
+        toggleAllOptions={
+          toggleAllOptions?.enabled && {
+            state: toggleAllState,
+            selectAllClicked: toggleAll,
+            selectedCount: isArray(selectedValue) ? selectedValue.length : undefined,
+          }
+        }
         styles={selectStyles}
         className={className}
+        autoWidth={width === 'auto'}
         {...commonSelectProps}
         {...creatableProps}
         {...asyncSelectProps}
@@ -349,7 +414,7 @@ function defaultFormatCreateLabel(input: string) {
       <div>{input}</div>
       <div style={{ flexGrow: 1 }} />
       <div className="muted small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-        Hit enter to add
+        <Trans i18nKey="grafana-ui.select.default-create-label">Hit enter to add</Trans>
       </div>
     </div>
   );
@@ -374,7 +439,7 @@ function CustomIndicatorsContainer(props: CustomIndicatorsContainerProps) {
         -1,
         0,
         <span key="excess-values" id="excess-values">
-          (+{selectedValuesCount - maxVisibleValues})
+          {`(+${selectedValuesCount - maxVisibleValues})`}
         </span>
       );
 

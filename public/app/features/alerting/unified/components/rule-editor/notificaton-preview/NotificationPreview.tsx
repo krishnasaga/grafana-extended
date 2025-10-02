@@ -1,29 +1,29 @@
 import { css } from '@emotion/css';
-import { compact } from 'lodash';
-import React, { lazy, Suspense } from 'react';
+import { Fragment, Suspense, lazy } from 'react';
+import { useEffectOnce } from 'react-use';
 
 import { GrafanaTheme2 } from '@grafana/data';
-import { Button, LoadingPlaceholder, Text, useStyles2 } from '@grafana/ui';
+import { Trans, t } from '@grafana/i18n';
+import { Button, LoadingPlaceholder, Stack, Text, useStyles2 } from '@grafana/ui';
 import { alertRuleApi } from 'app/features/alerting/unified/api/alertRuleApi';
-import { Stack } from 'app/plugins/datasource/parca/QueryEditor/Stack';
-import { AlertQuery } from 'app/types/unified-alerting-dto';
+import { AlertQuery, Labels } from 'app/types/unified-alerting-dto';
 
+import { Folder, KBObjectArray } from '../../../types/rule-form';
 import { useGetAlertManagerDataSourcesByPermissionAndConfig } from '../../../utils/datasource';
-import { Folder } from '../RuleFolderPicker';
 
 const NotificationPreviewByAlertManager = lazy(() => import('./NotificationPreviewByAlertManager'));
+const NotificationPreviewForGrafanaManaged = lazy(() => import('./NotificationPreviewGrafanaManaged'));
 
 interface NotificationPreviewProps {
-  customLabels: Array<{
-    key: string;
-    value: string;
-  }>;
+  customLabels: KBObjectArray;
   alertQueries: AlertQuery[];
   condition: string | null;
-  folder: Folder | null;
+  folder?: Folder;
   alertName?: string;
   alertUid?: string;
 }
+
+const { preview } = alertRuleApi.endpoints;
 
 // TODO the scroll position keeps resetting when we preview
 // this is to be expected because the list of routes dissapears as we start the request but is very annoying
@@ -38,13 +38,17 @@ export const NotificationPreview = ({
   const styles = useStyles2(getStyles);
   const disabled = !condition || !folder;
 
-  const previewEndpoint = alertRuleApi.endpoints.preview;
-
-  const [trigger, { data = [], isLoading, isUninitialized: previewUninitialized }] = previewEndpoint.useMutation();
+  const [trigger, { data = [], isLoading, isUninitialized: previewUninitialized }] = preview.useMutation();
 
   // potential instances are the instances that are going to be routed to the notification policies
   // convert data to list of labels: are the representation of the potential instances
-  const potentialInstances = compact(data.flatMap((label) => label?.labels));
+  const potentialInstances = data.reduce<Labels[]>((acc = [], instance) => {
+    if (instance.labels) {
+      acc.push(instance.labels);
+    }
+
+    return acc;
+  }, []);
 
   const onPreview = () => {
     if (!folder || !condition) {
@@ -62,48 +66,77 @@ export const NotificationPreview = ({
     });
   };
 
+  useEffectOnce(() => {
+    onPreview();
+  });
+
   //  Get alert managers's data source information
   const alertManagerDataSources = useGetAlertManagerDataSourcesByPermissionAndConfig('notification');
-
-  const onlyOneAM = alertManagerDataSources.length === 1;
+  const singleAlertManagerConfigured = alertManagerDataSources.length === 1;
 
   return (
     <Stack direction="column">
-      <div className={styles.routePreviewHeaderRow}>
-        <div className={styles.previewHeader}>
-          <Text element="h5">Alert instance routing preview</Text>
+      <Stack direction="row" alignItems="flex-start" justifyContent="space-between">
+        <Stack direction="column" gap={1}>
+          <Text element="h5">
+            <Trans i18nKey="alerting.notification-preview.title">Alert instance routing preview</Trans>
+          </Text>
           {isLoading && previewUninitialized && (
             <Text color="secondary" variant="bodySmall">
-              Loading...
+              <Trans i18nKey="alerting.common.loading">Loading...</Trans>
             </Text>
           )}
           {previewUninitialized ? (
             <Text color="secondary" variant="bodySmall">
-              When you have your folder selected and your query and labels are configured, click &quot;Preview
-              routing&quot; to see the results here.
+              <Trans i18nKey="alerting.notification-preview.uninitialized">
+                When you have your folder selected and your query and labels are configured, click &quot;Preview
+                routing&quot; to see the results here.
+              </Trans>
             </Text>
           ) : (
             <Text color="secondary" variant="bodySmall">
-              Based on the labels added, alert instances are routed to the following notification policies. Expand each
-              notification policy below to view more details.
+              <Trans i18nKey="alerting.notification-preview.initialized">
+                Based on the labels added, alert instances are routed to the following notification policies. Expand
+                each notification policy below to view more details.
+              </Trans>
             </Text>
           )}
-        </div>
-        <div className={styles.button}>
-          <Button icon="sync" variant="secondary" type="button" onClick={onPreview} disabled={disabled}>
-            Preview routing
-          </Button>
-        </div>
-      </div>
-      {!isLoading && !previewUninitialized && potentialInstances.length > 0 && (
-        <Suspense fallback={<LoadingPlaceholder text="Loading preview..." />}>
+        </Stack>
+        <Button icon="sync" variant="secondary" type="button" onClick={onPreview} disabled={disabled}>
+          <Trans i18nKey="alerting.notification-preview.preview-routing">Preview routing</Trans>
+        </Button>
+      </Stack>
+      {potentialInstances.length > 0 && (
+        <Suspense
+          fallback={
+            <LoadingPlaceholder text={t('alerting.notification-preview.text-loading-preview', 'Loading preview...')} />
+          }
+        >
           {alertManagerDataSources.map((alertManagerSource) => (
-            <NotificationPreviewByAlertManager
-              alertManagerSource={alertManagerSource}
-              potentialInstances={potentialInstances}
-              onlyOneAM={onlyOneAM}
-              key={alertManagerSource.name}
-            />
+            <Fragment key={alertManagerSource.name}>
+              {!singleAlertManagerConfigured && (
+                <Stack direction="row" alignItems="center">
+                  <div className={styles.firstAlertManagerLine} />
+                  <div className={styles.alertManagerName}>
+                    <Trans i18nKey="alerting.notification-preview.alertmanager">Alertmanager:</Trans>
+                    <img src={alertManagerSource.imgUrl} alt="" className={styles.img} />
+                    {alertManagerSource.name}
+                  </div>
+                  <div className={styles.secondAlertManagerLine} />
+                </Stack>
+              )}
+              {alertManagerSource.name === 'grafana' ? (
+                <NotificationPreviewForGrafanaManaged
+                  alertManagerSource={alertManagerSource}
+                  instances={potentialInstances}
+                />
+              ) : (
+                <NotificationPreviewByAlertManager
+                  alertManagerSource={alertManagerSource}
+                  instances={potentialInstances}
+                />
+              )}
+            </Fragment>
           ))}
         </Suspense>
       )}
@@ -112,34 +145,24 @@ export const NotificationPreview = ({
 };
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  collapsableSection: css`
-    width: auto;
-    border: 0;
-  `,
-  previewHeader: css`
-    margin: 0;
-  `,
-  routePreviewHeaderRow: css`
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-top: ${theme.spacing(1)};
-  `,
-  collapseLabel: css`
-    flex: 1;
-  `,
-  button: css`
-    justify-content: flex-end;
-  `,
-  tagsInDetails: css`
-    display: flex;
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  `,
-  policyPathItemMatchers: css`
-    display: flex;
-    flex-direction: row;
-    gap: ${theme.spacing(1)};
-  `,
+  firstAlertManagerLine: css({
+    height: '1px',
+    width: theme.spacing(4),
+    backgroundColor: theme.colors.secondary.main,
+  }),
+  alertManagerName: css({
+    width: 'fit-content',
+  }),
+  secondAlertManagerLine: css({
+    height: '1px',
+    width: '100%',
+    flex: 1,
+    backgroundColor: theme.colors.secondary.main,
+  }),
+  img: css({
+    marginLeft: theme.spacing(2),
+    width: theme.spacing(3),
+    height: theme.spacing(3),
+    marginRight: theme.spacing(1),
+  }),
 });

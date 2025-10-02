@@ -9,15 +9,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grafana/grafana/pkg/configprovider"
+	"github.com/grafana/grafana/pkg/services/authn"
+	"github.com/grafana/grafana/pkg/services/authn/authntest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/grafana/grafana/pkg/api/dtos"
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/infra/db/dbtest"
+	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/login/social"
 	"github.com/grafana/grafana/pkg/login/social/socialtest"
-	"github.com/grafana/grafana/pkg/models/roletype"
 	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/actest"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
@@ -33,17 +37,23 @@ import (
 	"github.com/grafana/grafana/pkg/services/user/userimpl"
 	"github.com/grafana/grafana/pkg/services/user/usertest"
 	"github.com/grafana/grafana/pkg/setting"
+	"github.com/grafana/grafana/pkg/util/testutil"
 	"github.com/grafana/grafana/pkg/web/webtest"
 )
 
-func setUpGetOrgUsersDB(t *testing.T, sqlStore *sqlstore.SQLStore) {
-	sqlStore.Cfg.AutoAssignOrg = true
-	sqlStore.Cfg.AutoAssignOrgId = int(testOrgID)
+func setUpGetOrgUsersDB(t *testing.T, sqlStore db.DB, cfg *setting.Cfg) {
+	cfg.AutoAssignOrg = true
+	cfg.AutoAssignOrgId = int(testOrgID)
 
-	quotaService := quotaimpl.ProvideService(sqlStore, sqlStore.Cfg)
-	orgService, err := orgimpl.ProvideService(sqlStore, sqlStore.Cfg, quotaService)
+	cfgProvider, err := configprovider.ProvideService(cfg)
 	require.NoError(t, err)
-	usrSvc, err := userimpl.ProvideService(sqlStore, orgService, sqlStore.Cfg, nil, nil, quotaService, supportbundlestest.NewFakeBundleService())
+	quotaService := quotaimpl.ProvideService(context.Background(), sqlStore, cfgProvider)
+	orgService, err := orgimpl.ProvideService(sqlStore, cfg, quotaService)
+	require.NoError(t, err)
+	usrSvc, err := userimpl.ProvideService(
+		sqlStore, orgService, cfg, nil, nil, tracing.InitializeTracerForTest(),
+		quotaService, supportbundlestest.NewFakeBundleService(),
+	)
 	require.NoError(t, err)
 
 	id, err := orgService.GetOrCreate(context.Background(), "testOrg")
@@ -58,17 +68,18 @@ func setUpGetOrgUsersDB(t *testing.T, sqlStore *sqlstore.SQLStore) {
 	require.NoError(t, err)
 }
 
-func TestOrgUsersAPIEndpoint_userLoggedIn(t *testing.T) {
+func TestIntegrationOrgUsersAPIEndpoint_userLoggedIn(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	hs := setupSimpleHTTPServer(featuremgmt.WithFeatures())
 	settings := hs.Cfg
 
-	sqlStore := db.InitTestDB(t)
-	sqlStore.Cfg = settings
+	sqlStore := db.InitTestDB(t, sqlstore.InitTestDBOpt{Cfg: settings})
 	hs.SQLStore = sqlStore
 	orgService := orgtest.NewOrgServiceFake()
 	orgService.ExpectedSearchOrgUsersResult = &org.SearchOrgUsersQueryResult{}
 	hs.orgService = orgService
-	setUpGetOrgUsersDB(t, sqlStore)
+	setUpGetOrgUsersDB(t, sqlStore, settings)
 	mock := dbtest.NewFakeDB()
 
 	loggedInUserScenario(t, "When calling GET on", "api/org/users", "api/org/users", func(sc *scenarioContext) {
@@ -255,9 +266,17 @@ func TestOrgUsersAPIEndpoint_updateOrgRole(t *testing.T) {
 			server := SetupAPITestServer(t, func(hs *HTTPServer) {
 				hs.Cfg = setting.NewCfg()
 				hs.Cfg.LDAPAuthEnabled = tt.AuthEnabled
-				if tt.AuthModule == login.LDAPAuthModule {
+				switch tt.AuthModule {
+				case login.LDAPAuthModule:
 					hs.Cfg.LDAPAuthEnabled = tt.AuthEnabled
 					hs.Cfg.LDAPSkipOrgRoleSync = tt.SkipOrgRoleSync
+				case login.GrafanaComAuthModule:
+					hs.authnService = &authntest.FakeService{
+						EnabledClients: []string{authn.ClientWithPrefix("grafana_com")},
+						ExpectedClientConfig: &authntest.FakeSSOClientConfig{
+							ExpectedIsSkipOrgRoleSyncEnabled: tt.SkipOrgRoleSync,
+						},
+					}
 				}
 				// AuthModule empty means basic auth
 
@@ -275,7 +294,7 @@ func TestOrgUsersAPIEndpoint_updateOrgRole(t *testing.T) {
 			})
 			req := server.NewRequest(http.MethodPatch, fmt.Sprintf("/api/orgs/%d/users/%d", userRequesting.OrgID, userRequesting.ID), strings.NewReader(reqBody))
 			req.Header.Set("Content-Type", "application/json")
-			userWithPermissions.OrgRole = roletype.RoleAdmin
+			userWithPermissions.OrgRole = identity.RoleAdmin
 			res, err := server.Send(webtest.RequestWithSignedInUser(req, userWithPermissions))
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectedCode, res.StatusCode)

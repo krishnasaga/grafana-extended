@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,11 +25,6 @@ import (
 	"github.com/grafana/grafana/pkg/setting"
 )
 
-var (
-	allOauthes = []string{social.GitHubProviderName, social.GitlabProviderName, social.GoogleProviderName, social.GenericOAuthProviderName, social.GrafanaNetProviderName,
-		social.GrafanaComProviderName, social.AzureADProviderName, social.OktaProviderName}
-)
-
 type SocialService struct {
 	cfg *setting.Cfg
 
@@ -41,6 +37,7 @@ func ProvideService(cfg *setting.Cfg,
 	usageStats usagestats.Service,
 	bundleRegistry supportbundles.Service,
 	cache remotecache.CacheStorage,
+	orgRoleMapper *connectors.OrgRoleMapper,
 	ssoSettings ssosettings.Service,
 ) *SocialService {
 	ss := &SocialService{
@@ -51,51 +48,30 @@ func ProvideService(cfg *setting.Cfg,
 
 	usageStats.RegisterMetricsFunc(ss.getUsageStats)
 
-	if features.IsEnabledGlobally(featuremgmt.FlagSsoSettingsApi) {
-		allSettings, err := ssoSettings.List(context.Background())
+	allSettings, err := ssoSettings.List(context.Background())
+	if err != nil {
+		ss.log.Error("Failed to get SSO settings", "error", err)
+	}
+
+	for _, ssoSetting := range allSettings {
+		// ignore non-oauth2 providers
+		if !slices.Contains(ssosettings.AllOAuthProviders, ssoSetting.Provider) {
+			continue
+		}
+
+		info, err := connectors.CreateOAuthInfoFromKeyValuesWithLogging(ss.log, ssoSetting.Provider, ssoSetting.Settings)
 		if err != nil {
-			ss.log.Error("Failed to get SSO settings", "error", err)
+			ss.log.Error("Failed to create OAuthInfo for provider", "error", err, "provider", ssoSetting.Provider)
+			continue
 		}
 
-		for _, ssoSetting := range allSettings {
-			info, err := connectors.CreateOAuthInfoFromKeyValues(ssoSetting.Settings)
-			if err != nil {
-				ss.log.Error("Failed to create OAuthInfo for provider", "error", err, "provider", ssoSetting.Provider)
-				continue
-			}
-
-			conn, err := createOAuthConnector(ssoSetting.Provider, info, cfg, ssoSettings, features, cache)
-			if err != nil {
-				ss.log.Error("Failed to create OAuth provider", "error", err, "provider", ssoSetting.Provider)
-				continue
-			}
-
-			ss.socialMap[ssoSetting.Provider] = conn
+		conn, err := createOAuthConnector(ssoSetting.Provider, info, cfg, orgRoleMapper, ssoSettings, features, cache)
+		if err != nil {
+			ss.log.Error("Failed to create OAuth provider", "error", err, "provider", ssoSetting.Provider)
+			continue
 		}
-	} else {
-		for _, name := range allOauthes {
-			sec := cfg.Raw.Section("auth." + name)
 
-			settingsKVs := convertIniSectionToMap(sec)
-
-			info, err := connectors.CreateOAuthInfoFromKeyValues(settingsKVs)
-			if err != nil {
-				ss.log.Error("Failed to create OAuthInfo for provider", "error", err, "provider", name)
-				continue
-			}
-
-			if !info.Enabled {
-				continue
-			}
-
-			if name == social.GrafanaNetProviderName {
-				name = social.GrafanaComProviderName
-			}
-
-			conn, _ := createOAuthConnector(name, info, cfg, ssoSettings, features, cache)
-
-			ss.socialMap[name] = conn
-		}
+		ss.socialMap[ssoSetting.Provider] = conn
 	}
 
 	ss.registerSupportBundleCollectors(bundleRegistry)
@@ -223,22 +199,22 @@ func (ss *SocialService) getUsageStats(ctx context.Context) (map[string]any, err
 	return m, nil
 }
 
-func createOAuthConnector(name string, info *social.OAuthInfo, cfg *setting.Cfg, ssoSettings ssosettings.Service, features featuremgmt.FeatureToggles, cache remotecache.CacheStorage) (social.SocialConnector, error) {
+func createOAuthConnector(name string, info *social.OAuthInfo, cfg *setting.Cfg, orgRoleMapper *connectors.OrgRoleMapper, ssoSettings ssosettings.Service, features featuremgmt.FeatureToggles, cache remotecache.CacheStorage) (social.SocialConnector, error) {
 	switch name {
 	case social.AzureADProviderName:
-		return connectors.NewAzureADProvider(info, cfg, ssoSettings, features, cache), nil
+		return connectors.NewAzureADProvider(info, cfg, orgRoleMapper, ssoSettings, features, cache), nil
 	case social.GenericOAuthProviderName:
-		return connectors.NewGenericOAuthProvider(info, cfg, ssoSettings, features), nil
+		return connectors.NewGenericOAuthProvider(info, cfg, orgRoleMapper, ssoSettings, features), nil
 	case social.GitHubProviderName:
-		return connectors.NewGitHubProvider(info, cfg, ssoSettings, features), nil
+		return connectors.NewGitHubProvider(info, cfg, orgRoleMapper, ssoSettings, features), nil
 	case social.GitlabProviderName:
-		return connectors.NewGitLabProvider(info, cfg, ssoSettings, features), nil
+		return connectors.NewGitLabProvider(info, cfg, orgRoleMapper, ssoSettings, features), nil
 	case social.GoogleProviderName:
-		return connectors.NewGoogleProvider(info, cfg, ssoSettings, features), nil
+		return connectors.NewGoogleProvider(info, cfg, orgRoleMapper, ssoSettings, features), nil
 	case social.GrafanaComProviderName:
-		return connectors.NewGrafanaComProvider(info, cfg, ssoSettings, features), nil
+		return connectors.NewGrafanaComProvider(info, cfg, orgRoleMapper, ssoSettings, features), nil
 	case social.OktaProviderName:
-		return connectors.NewOktaProvider(info, cfg, ssoSettings, features), nil
+		return connectors.NewOktaProvider(info, cfg, orgRoleMapper, ssoSettings, features), nil
 	default:
 		return nil, fmt.Errorf("unknown oauth provider: %s", name)
 	}

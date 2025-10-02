@@ -1,11 +1,10 @@
-import { Meta, Story } from '@storybook/react';
-import React from 'react';
+import { Meta, StoryFn } from '@storybook/react';
 
 import { FileListItem as FileListItemComponent, FileListItemProps } from './FileListItem';
 import mdx from './FileListItem.mdx';
 
 const meta: Meta = {
-  title: 'Forms/FileListItem',
+  title: 'Inputs/FileListItem',
   component: FileListItemComponent,
   parameters: {
     docs: {
@@ -22,7 +21,7 @@ const meta: Meta = {
   },
 };
 
-export const FileListItem: Story<FileListItemProps> = (args) => {
+export const FileListItem: StoryFn<FileListItemProps> = (args) => {
   return <FileListItemComponent {...args} />;
 };
 

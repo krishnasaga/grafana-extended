@@ -1,11 +1,10 @@
-import { ComponentMeta, ComponentStory } from '@storybook/react';
-import React from 'react';
+import { Meta, StoryFn } from '@storybook/react';
 
 import { UserIcon } from './UserIcon';
 import mdx from './UserIcon.mdx';
 
-const meta: ComponentMeta<typeof UserIcon> = {
-  title: 'General/UsersIndicator/UserIcon',
+const meta: Meta<typeof UserIcon> = {
+  title: 'Iconography/UserIcon',
   component: UserIcon,
   argTypes: {},
   parameters: {
@@ -28,7 +27,7 @@ const meta: ComponentMeta<typeof UserIcon> = {
   },
 };
 
-export const Basic: ComponentStory<typeof UserIcon> = (args) => {
+export const Basic: StoryFn<typeof UserIcon> = (args) => {
   const userView = {
     user: {
       name: 'John Smith',

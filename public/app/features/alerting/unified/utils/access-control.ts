@@ -1,6 +1,6 @@
 import { getConfig } from 'app/core/config';
 import { contextSrv } from 'app/core/services/context_srv';
-import { AccessControlAction } from 'app/types';
+import { AccessControlAction } from 'app/types/accessControl';
 
 import { GRAFANA_RULES_SOURCE_NAME, isGrafanaRulesSource } from './datasource';
 
@@ -45,6 +45,21 @@ export const notificationsPermissions = {
   delete: {
     grafana: AccessControlAction.AlertingNotificationsWrite,
     external: AccessControlAction.AlertingNotificationsExternalWrite,
+  },
+};
+
+export const silencesPermissions = {
+  read: {
+    grafana: AccessControlAction.AlertingSilenceRead,
+    external: AccessControlAction.AlertingInstanceRead,
+  },
+  create: {
+    grafana: AccessControlAction.AlertingSilenceCreate,
+    external: AccessControlAction.AlertingInstancesExternalWrite,
+  },
+  update: {
+    grafana: AccessControlAction.AlertingSilenceUpdate,
+    external: AccessControlAction.AlertingInstancesExternalWrite,
   },
 };
 

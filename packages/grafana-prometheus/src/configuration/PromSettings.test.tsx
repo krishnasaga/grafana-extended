@@ -1,10 +1,12 @@
+// Core Grafana history https://github.com/grafana/grafana/blob/v11.0.0-preview/public/app/plugins/datasource/prometheus/configuration/PromSettings.test.tsx
 import { render, screen } from '@testing-library/react';
-import React, { SyntheticEvent } from 'react';
+import { SyntheticEvent } from 'react';
 
 import { SelectableValue } from '@grafana/data';
 
+import { createDefaultConfigOptions } from '../test/mocks/datasource';
+
 import { getValueFromEventItem, PromSettings } from './PromSettings';
-import { createDefaultConfigOptions } from './mocks';
 
 describe('PromSettings', () => {
   describe('getValueFromEventItem', () => {
@@ -60,6 +62,13 @@ describe('PromSettings', () => {
 
       render(<PromSettings onOptionsChange={() => {}} options={options} />);
       expect(screen.getByText('GET')).toBeInTheDocument();
+    });
+
+    it('should have a series endpoint configuration element', () => {
+      const options = defaultProps;
+
+      render(<PromSettings onOptionsChange={() => {}} options={options} />);
+      expect(screen.getByText('Use series endpoint')).toBeInTheDocument();
     });
   });
 });

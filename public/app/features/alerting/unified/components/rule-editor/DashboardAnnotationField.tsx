@@ -1,9 +1,9 @@
 import { css } from '@emotion/css';
-import React from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
-import { Icon, useStyles2 } from '@grafana/ui';
-import { DashboardDataDTO } from 'app/types';
+import { Trans } from '@grafana/i18n';
+import { Icon, Text, useStyles2 } from '@grafana/ui';
+import { DashboardDataDTO } from 'app/types/dashboard';
 
 import { makeDashboardLink, makePanelLink } from '../../utils/misc';
 
@@ -42,7 +42,13 @@ const DashboardAnnotationField = ({
         </a>
       )}
 
-      {!dashboard && <span className={styles.noLink}>Dashboard {dashboardUid} </span>}
+      {!dashboard && (
+        <Text color="secondary">
+          <Trans i18nKey="alerting.annotations.dashboard-annotation-field.dashboard" values={{ dashboardUid }}>
+            Dashboard {{ dashboardUid }}
+          </Trans>
+        </Text>
+      )}
 
       {panel && (
         <a href={panelLink} className={styles.link} target="_blank" rel="noreferrer" data-testid="panel-annotation">
@@ -50,7 +56,16 @@ const DashboardAnnotationField = ({
         </a>
       )}
 
-      {!panel && <span className={styles.noLink}> - Panel {panelId}</span>}
+      {!panel && (
+        <>
+          <span> - </span>
+          <Text color="secondary">
+            <Trans i18nKey="alerting.annotations.dashboard-annotation-field.panel" values={{ panelId }}>
+              Panel {{ panelId }}
+            </Trans>
+          </Text>
+        </>
+      )}
 
       {(dashboard || panel) && (
         <>
@@ -63,22 +78,22 @@ const DashboardAnnotationField = ({
 };
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  container: css`
-    margin-top: 5px;
-  `,
+  container: css({
+    marginTop: '5px',
+  }),
 
-  noLink: css`
-    color: ${theme.colors.text.secondary};
-  `,
-  link: css`
-    color: ${theme.colors.text.link};
-    margin-right: ${theme.spacing(1.5)};
-  `,
+  noLink: css({
+    color: theme.colors.text.secondary,
+  }),
+  link: css({
+    color: theme.colors.text.link,
+    marginRight: theme.spacing(1.5),
+  }),
 
-  icon: css`
-    margin-right: ${theme.spacing(1)};
-    cursor: pointer;
-  `,
+  icon: css({
+    marginRight: theme.spacing(1),
+    cursor: 'pointer',
+  }),
 });
 
 export default DashboardAnnotationField;

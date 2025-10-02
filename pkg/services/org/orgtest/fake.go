@@ -20,6 +20,8 @@ type FakeOrgService struct {
 	ExpectedOrgUsers             []*org.OrgUserDTO
 	ExpectedSearchOrgUsersResult *org.SearchOrgUsersQueryResult
 	ExpectedOrgListResponse      OrgListResponse
+	SearchOrgUsersFn             func(context.Context, *org.SearchOrgUsersQuery) (*org.SearchOrgUsersQueryResult, error)
+	InsertOrgUserFn              func(context.Context, *org.OrgUser) (int64, error)
 }
 
 func NewOrgServiceFake() *FakeOrgService {
@@ -35,6 +37,9 @@ func (f *FakeOrgService) Insert(ctx context.Context, cmd *org.OrgUser) (int64, e
 }
 
 func (f *FakeOrgService) InsertOrgUser(ctx context.Context, cmd *org.OrgUser) (int64, error) {
+	if f.InsertOrgUserFn != nil {
+		return f.InsertOrgUserFn(ctx, cmd)
+	}
 	return f.ExpectedOrgUserID, f.ExpectedError
 }
 
@@ -59,6 +64,11 @@ func (f *FakeOrgService) GetByID(ctx context.Context, query *org.GetOrgByIDQuery
 }
 
 func (f *FakeOrgService) GetByName(ctx context.Context, query *org.GetOrgByNameQuery) (*org.Org, error) {
+	for _, expectedOrg := range f.ExpectedOrgs {
+		if expectedOrg != nil && expectedOrg.Name == query.Name {
+			return &org.Org{ID: expectedOrg.ID, Name: expectedOrg.Name}, nil
+		}
+	}
 	return f.ExpectedOrg, f.ExpectedError
 }
 
@@ -67,10 +77,6 @@ func (f *FakeOrgService) CreateWithMember(ctx context.Context, cmd *org.CreateOr
 }
 
 func (f *FakeOrgService) UpdateAddress(ctx context.Context, cmd *org.UpdateOrgAddressCommand) error {
-	return f.ExpectedError
-}
-
-func (f *FakeOrgService) Delete(ctx context.Context, cmd *org.DeleteOrgCommand) error {
 	return f.ExpectedError
 }
 
@@ -97,8 +103,23 @@ func (f *FakeOrgService) RemoveOrgUser(ctx context.Context, cmd *org.RemoveOrgUs
 }
 
 func (f *FakeOrgService) SearchOrgUsers(ctx context.Context, query *org.SearchOrgUsersQuery) (*org.SearchOrgUsersQueryResult, error) {
+	if f.SearchOrgUsersFn != nil {
+		return f.SearchOrgUsersFn(ctx, query)
+	}
 	return f.ExpectedSearchOrgUsersResult, f.ExpectedError
 }
 
 func (f *FakeOrgService) RegisterDelete(query string) {
+}
+
+type FakeOrgDeletionService struct {
+	ExpectedError error
+}
+
+func NewOrgDeletionServiceFake() *FakeOrgDeletionService {
+	return &FakeOrgDeletionService{}
+}
+
+func (f *FakeOrgDeletionService) Delete(ctx context.Context, cmd *org.DeleteOrgCommand) error {
+	return f.ExpectedError
 }

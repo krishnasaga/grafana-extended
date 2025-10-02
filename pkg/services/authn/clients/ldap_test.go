@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/services/authn"
 	"github.com/grafana/grafana/pkg/services/ldap"
 	"github.com/grafana/grafana/pkg/services/ldap/multildap"
@@ -187,7 +187,7 @@ func setupLDAPTestCase(tt *ldapTestCase) *LDAP {
 	userService := &usertest.FakeUserService{
 		ExpectedError: tt.expectedUserErr,
 		ExpectedUser:  &tt.expectedUser,
-		DisableFn: func(ctx context.Context, cmd *user.DisableUserCommand) error {
+		UpdateFn: func(ctx context.Context, cmd *user.UpdateUserCommand) error {
 			tt.disableCalled = true
 			return nil
 		},
@@ -197,13 +197,13 @@ func setupLDAPTestCase(tt *ldapTestCase) *LDAP {
 		ExpectedError:    tt.expectedAuthInfoErr,
 	}
 
-	c := &LDAP{
-		cfg:             setting.NewCfg(),
-		logger:          log.New("authn.ldap.test"),
-		service:         &service.LDAPFakeService{ExpectedUser: tt.expectedLDAPInfo, ExpectedError: tt.expectedLDAPErr},
-		userService:     userService,
-		authInfoService: authInfoService,
-	}
+	c := ProvideLDAP(
+		setting.NewCfg(),
+		&service.LDAPFakeService{ExpectedUser: tt.expectedLDAPInfo, ExpectedError: tt.expectedLDAPErr},
+		userService,
+		authInfoService,
+		tracing.InitializeTracerForTest(),
+	)
 
 	return c
 }

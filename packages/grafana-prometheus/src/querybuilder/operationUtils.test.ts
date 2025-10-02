@@ -1,9 +1,10 @@
+// Core Grafana history https://github.com/grafana/grafana/blob/v11.0.0-preview/public/app/plugins/datasource/prometheus/querybuilder/operationUtils.test.ts
 import {
   createAggregationOperation,
   createAggregationOperationWithParam,
-  getOperationParamId,
   isConflictingSelector,
 } from './operationUtils';
+import { getOperationParamId } from './shared/param_utils';
 
 describe('createAggregationOperation', () => {
   it('returns correct aggregation definitions with overrides', () => {

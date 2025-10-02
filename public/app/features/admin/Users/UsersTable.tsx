@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
-import { UseTableRowProps } from 'react-table';
+import { useMemo } from 'react';
 
+import { Trans, t } from '@grafana/i18n';
 import {
   Avatar,
   CellProps,
@@ -8,20 +8,22 @@ import {
   FetchDataFunc,
   Icon,
   InteractiveTable,
+  LinkButton,
   Pagination,
   Stack,
   Tag,
   Text,
+  TextLink,
   Tooltip,
 } from '@grafana/ui';
 import { TagBadge } from 'app/core/components/TagFilter/TagBadge';
-import { UserDTO } from 'app/types';
+import { UserDTO } from 'app/types/user';
 
 import { OrgUnits } from './OrgUnits';
 
 type Cell<T extends keyof UserDTO = keyof UserDTO> = CellProps<UserDTO, UserDTO[T]>;
 
-interface UsersTableProps {
+export interface UsersTableProps {
   users: UserDTO[];
   showPaging?: boolean;
   totalPages: number;
@@ -40,6 +42,7 @@ export const UsersTable = ({
 }: UsersTableProps) => {
   const showLicensedRole = useMemo(() => users.some((user) => user.licensedRole), [users]);
   const showBelongsTo = useMemo(() => users.some((user) => user.orgs), [users]);
+
   const columns: Array<Column<UserDTO>> = useMemo(
     () => [
       {
@@ -50,7 +53,18 @@ export const UsersTable = ({
       {
         id: 'login',
         header: 'Login',
-        cell: ({ cell: { value } }: Cell<'login'>) => value,
+        cell: ({ row: { original } }: Cell<'login'>) => {
+          return (
+            <TextLink
+              color="primary"
+              inline={false}
+              href={`/admin/users/edit/${original.uid}`}
+              title={t('admin.users-table.columns.title-edit-user', 'Edit user')}
+            >
+              {original.login}
+            </TextLink>
+          );
+        },
         sortType: 'string',
       },
       {
@@ -75,15 +89,16 @@ export const UsersTable = ({
                   <Stack alignItems={'center'}>
                     <OrgUnits units={value} icon={'building'} />
                     {row.original.isAdmin && (
-                      <Tooltip placement="top" content="Grafana Admin">
+                      <Tooltip
+                        placement="top"
+                        content={t('admin.users-table.columns.content-grafana-admin', 'Grafana Admin')}
+                      >
                         <Icon name="shield" />
                       </Tooltip>
                     )}
                   </Stack>
                 );
               },
-              sortType: (a: UseTableRowProps<UserDTO>, b: UseTableRowProps<UserDTO>) =>
-                (a.original.orgs?.length || 0) - (b.original.orgs?.length || 0),
             },
           ]
         : []),
@@ -95,17 +110,21 @@ export const UsersTable = ({
               cell: ({ cell: { value } }: Cell<'licensedRole'>) => {
                 return value === 'None' ? (
                   <Text color={'disabled'}>
-                    Not assigned{' '}
-                    <Tooltip placement="top" content="A licensed role will be assigned when this user signs in">
-                      <Icon name="question-circle" />
+                    <Trans i18nKey="admin.users-table.no-licensed-roles">Not assigned</Trans>
+                    <Tooltip
+                      placement="top"
+                      content={t(
+                        'admin.users-table.tooltip-assigned-role',
+                        'A licensed role will be assigned when this user signs in'
+                      )}
+                    >
+                      <Icon name="question-circle" style={{ margin: '0 0 4 4' }} />
                     </Tooltip>
                   </Text>
                 ) : (
                   value
                 );
               },
-              // Needs the assertion here, the types are not inferred correctly due to the  conditional assignment
-              sortType: 'string' as const,
             },
           ]
         : []),
@@ -117,7 +136,21 @@ export const UsersTable = ({
           iconName: 'question-circle',
         },
         cell: ({ cell: { value } }: Cell<'lastSeenAtAge'>) => {
-          return <>{value && <>{value === '10 years' ? <Text color={'disabled'}>Never</Text> : value}</>}</>;
+          return (
+            <>
+              {value && (
+                <>
+                  {value === '10 years' ? (
+                    <Text color={'disabled'}>
+                      <Trans i18nKey="admin.users-table.last-seen-never">Never</Trans>
+                    </Text>
+                  ) : (
+                    value
+                  )}
+                </>
+              )}
+            </>
+          );
         },
         sortType: (a, b) => new Date(a.original.lastSeenAt!).getTime() - new Date(b.original.lastSeenAt!).getTime(),
       },
@@ -126,6 +159,13 @@ export const UsersTable = ({
         header: 'Origin',
         cell: ({ cell: { value } }: Cell<'authLabels'>) => (
           <>{Array.isArray(value) && value.length > 0 && <TagBadge label={value[0]} removeIcon={false} count={0} />}</>
+        ),
+      },
+      {
+        id: 'isProvisioned',
+        header: 'Provisioned',
+        cell: ({ cell: { value } }: Cell<'isProvisioned'>) => (
+          <>{value && <Tag colorIndex={14} name={'Provisioned'} />}</>
         ),
       },
       {
@@ -138,11 +178,14 @@ export const UsersTable = ({
         header: '',
         cell: ({ row: { original } }: Cell) => {
           return (
-            <a href={`admin/users/edit/${original.id}`} aria-label={`Edit team ${original.name}`}>
-              <Tooltip content={'Edit user'}>
-                <Icon name={'pen'} />
-              </Tooltip>
-            </a>
+            <LinkButton
+              variant="secondary"
+              size="sm"
+              icon="pen"
+              href={`admin/users/edit/${original.uid}`}
+              aria-label={t('admin.users-table.edit-aria-label', 'Edit user: {{name}}', { name: original.name })}
+              tooltip={t('admin.users-table.edit-tooltip', 'Edit user')}
+            />
           );
         },
       },

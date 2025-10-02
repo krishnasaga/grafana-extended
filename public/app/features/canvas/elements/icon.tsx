@@ -1,15 +1,18 @@
 import { css } from '@emotion/css';
 import { isString } from 'lodash';
-import React, { CSSProperties } from 'react';
+import { CSSProperties } from 'react';
 
+import { LinkModel } from '@grafana/data';
+import { t } from '@grafana/i18n';
 import { ColorDimensionConfig, ResourceDimensionConfig, ResourceDimensionMode } from '@grafana/schema';
 import { SanitizedSVG } from 'app/core/components/SVG/SanitizedSVG';
-import { getPublicOrAbsoluteUrl } from 'app/features/dimensions';
 import { DimensionContext } from 'app/features/dimensions/context';
-import { ColorDimensionEditor, ResourceDimensionEditor } from 'app/features/dimensions/editors';
+import { ColorDimensionEditor } from 'app/features/dimensions/editors/ColorDimensionEditor';
+import { ResourceDimensionEditor } from 'app/features/dimensions/editors/ResourceDimensionEditor';
+import { getPublicOrAbsoluteUrl } from 'app/features/dimensions/resource';
+import { LineConfig } from 'app/plugins/panel/canvas/panelcfg.gen';
 
-import { CanvasElementItem, CanvasElementProps, defaultBgColor } from '../element';
-import { LineConfig } from '../types';
+import { CanvasElementItem, CanvasElementOptions, CanvasElementProps, defaultBgColor } from '../element';
 
 export interface IconConfig {
   path?: ResourceDimensionConfig;
@@ -22,6 +25,7 @@ interface IconData {
   fill: string;
   strokeColor?: string;
   stroke?: number;
+  links?: LinkModel[];
 }
 
 // When a stoke is defined, we want the path to be in page units
@@ -31,7 +35,7 @@ const svgStrokePathClass = css({
   },
 });
 
-export function IconDisplay(props: CanvasElementProps) {
+export function IconDisplay(props: CanvasElementProps<IconConfig, IconData>) {
   const { data } = props;
   if (!data?.path) {
     return null;
@@ -76,14 +80,18 @@ export const iconItem: CanvasElementItem<IconConfig, IconData> = {
       height: options?.placement?.height ?? 100,
       top: options?.placement?.top ?? 100,
       left: options?.placement?.left ?? 100,
+      rotation: options?.placement?.rotation ?? 0,
     },
+    links: options?.links ?? [],
   }),
 
   // Called when data changes
-  prepareData: (ctx: DimensionContext, cfg: IconConfig) => {
+  prepareData: (dimensionContext: DimensionContext, elementOptions: CanvasElementOptions<IconConfig>) => {
+    const iconConfig = elementOptions.config;
+
     let path: string | undefined = undefined;
-    if (cfg.path) {
-      path = ctx.getResource(cfg.path).value();
+    if (iconConfig?.path) {
+      path = dimensionContext.getResource(iconConfig.path).value();
     }
     if (!path || !isString(path)) {
       path = getPublicOrAbsoluteUrl('img/icons/unicons/question-circle.svg');
@@ -91,27 +99,28 @@ export const iconItem: CanvasElementItem<IconConfig, IconData> = {
 
     const data: IconData = {
       path,
-      fill: cfg.fill ? ctx.getColor(cfg.fill).value() : defaultBgColor,
+      fill: iconConfig?.fill ? dimensionContext.getColor(iconConfig.fill).value() : defaultBgColor,
     };
 
-    if (cfg.stroke?.width && cfg.stroke.color) {
-      if (cfg.stroke.width > 0) {
-        data.stroke = cfg.stroke?.width;
-        data.strokeColor = ctx.getColor(cfg.stroke.color).value();
+    if (iconConfig?.stroke?.width && iconConfig?.stroke.color) {
+      if (iconConfig.stroke.width > 0) {
+        data.stroke = iconConfig.stroke?.width;
+        data.strokeColor = dimensionContext.getColor(iconConfig.stroke.color).value();
       }
     }
+
     return data;
   },
 
   // Heatmap overlay options
   registerOptionsUI: (builder) => {
-    const category = ['Icon'];
+    const category = [t('canvas.icon-item.category-icon', 'Icon')];
     builder
       .addCustomEditor({
         category,
         id: 'iconSelector',
         path: 'config.path',
-        name: 'SVG Path',
+        name: t('canvas.icon-item.name-svg-path', 'SVG Path'),
         editor: ResourceDimensionEditor,
         settings: {
           resourceType: 'icon',
@@ -122,7 +131,7 @@ export const iconItem: CanvasElementItem<IconConfig, IconData> = {
         category,
         id: 'config.fill',
         path: 'config.fill',
-        name: 'Fill color',
+        name: t('canvas.icon-item.name-fill-color', 'Fill color'),
         editor: ColorDimensionEditor,
         settings: {},
         defaultValue: {

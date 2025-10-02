@@ -1,24 +1,45 @@
 import { auto } from '@popperjs/core';
 import { action } from '@storybook/addon-actions';
-import { Meta, Story } from '@storybook/react';
-import React, { useState } from 'react';
+import { Meta, StoryFn } from '@storybook/react';
+import Chance from 'chance';
+import { useId, useState } from 'react';
 
 import { SelectableValue, toIconName } from '@grafana/data';
-import { Icon, Select, AsyncSelect, MultiSelect, AsyncMultiSelect } from '@grafana/ui';
 
-import { getAvailableIcons } from '../../types';
+import { getAvailableIcons } from '../../types/icon';
+import { Alert } from '../Alert/Alert';
+import { Field } from '../Forms/Field';
+import { Icon } from '../Icon/Icon';
 
+import { AsyncMultiSelect, AsyncSelect, MultiSelect, Select } from './Select';
 import mdx from './Select.mdx';
 import { generateOptions, generateThousandsOfOptions } from './mockOptions';
 import { SelectCommonProps } from './types';
 
+const chance = new Chance();
+
+const manyGroupedOptions = [
+  { label: 'Foo', value: '1' },
+  {
+    label: 'Animals',
+    options: new Array(100).fill(0).map((_, i) => {
+      const animal = chance.animal();
+      return { label: animal, value: animal };
+    }),
+  },
+  {
+    label: 'People',
+    options: new Array(100).fill(0).map((_, i) => {
+      const person = chance.name();
+      return { label: person, value: person };
+    }),
+  },
+  { label: 'Bar', value: '3' },
+];
+
 const meta: Meta = {
-  title: 'Forms/Select',
+  title: 'Inputs/Deprecated/Select',
   component: Select,
-  // SB7 has broken subcomponent types due to dropping support for the feature
-  // https://github.com/storybookjs/storybook/issues/20782
-  // @ts-ignore
-  subcomponents: { AsyncSelect, MultiSelect, AsyncMultiSelect },
   parameters: {
     docs: {
       page: mdx,
@@ -69,6 +90,7 @@ const meta: Meta = {
       },
     },
   },
+  decorators: [DeprecatedDecorator],
 };
 
 const loadAsyncOptions = () => {
@@ -88,12 +110,14 @@ interface StoryProps extends Partial<SelectCommonProps<string>> {
   icon: string;
 }
 
-export const Basic: Story<StoryProps> = (args) => {
+export const Basic: StoryFn<StoryProps> = (args) => {
   const [value, setValue] = useState<SelectableValue<string>>();
+  const id = useId();
 
   return (
-    <>
+    <Field noMargin label="Select an option">
       <Select
+        inputId={id}
         options={generateOptions()}
         value={value}
         onChange={(v) => {
@@ -102,15 +126,18 @@ export const Basic: Story<StoryProps> = (args) => {
         }}
         {...args}
       />
-    </>
+    </Field>
   );
 };
-export const BasicVirtualizedList: Story<StoryProps> = (args) => {
+
+export const BasicVirtualizedList: StoryFn<StoryProps> = (args) => {
   const [value, setValue] = useState<SelectableValue<string>>();
+  const id = useId();
 
   return (
-    <>
+    <Field noMargin label="Select an option">
       <Select
+        inputId={id}
         options={generateThousandsOfOptions()}
         virtualized
         value={value}
@@ -120,17 +147,20 @@ export const BasicVirtualizedList: Story<StoryProps> = (args) => {
         }}
         {...args}
       />
-    </>
+    </Field>
   );
 };
+
 /**
  * Uses plain values instead of SelectableValue<T>
  */
-export const BasicSelectPlainValue: Story<StoryProps> = (args) => {
+export const BasicSelectPlainValue: StoryFn<StoryProps> = (args) => {
   const [value, setValue] = useState<string>();
+  const id = useId();
   return (
-    <>
+    <Field noMargin label="Select an option">
       <Select
+        inputId={id}
         options={generateOptions()}
         value={value}
         onChange={(v) => {
@@ -140,13 +170,14 @@ export const BasicSelectPlainValue: Story<StoryProps> = (args) => {
         prefix={getPrefix(args.icon)}
         {...args}
       />
-    </>
+    </Field>
   );
 };
+
 /**
  * Uses plain values instead of SelectableValue<T>
  */
-export const SelectWithOptionDescriptions: Story = (args) => {
+export const SelectWithOptionDescriptions: StoryFn = (args) => {
   // TODO this is not working with new Select
 
   const [value, setValue] = useState<number>();
@@ -160,10 +191,12 @@ export const SelectWithOptionDescriptions: Story = (args) => {
       imgUrl: 'https://placekitten.com/40/40',
     },
   ];
+  const id = useId();
 
   return (
-    <>
+    <Field noMargin label="Select an option">
       <Select
+        inputId={id}
         options={options}
         value={value}
         onChange={(v) => {
@@ -173,19 +206,21 @@ export const SelectWithOptionDescriptions: Story = (args) => {
         prefix={getPrefix(args.icon)}
         {...args}
       />
-    </>
+    </Field>
   );
 };
 
 /**
  * Uses plain values instead of SelectableValue<T>
  */
-export const MultiPlainValue: Story = (args) => {
+export const MultiPlainValue: StoryFn = (args) => {
   const [value, setValue] = useState<string[]>();
+  const id = useId();
 
   return (
-    <>
+    <Field noMargin label="Select an option">
       <MultiSelect
+        inputId={id}
         options={generateOptions()}
         value={value}
         onChange={(v) => {
@@ -194,19 +229,41 @@ export const MultiPlainValue: Story = (args) => {
         prefix={getPrefix(args.icon)}
         {...args}
       />
-    </>
+    </Field>
   );
 };
 
-export const MultiSelectWithOptionGroups: Story = (args) => {
+export const MultiSelectWithOptionGroups: StoryFn = (args) => {
   const [value, setValue] = useState<string[]>();
+  const id = useId();
 
   return (
-    <>
+    <Field noMargin label="Select an option">
       <MultiSelect
+        inputId={id}
         options={[
-          { label: '1', value: '1' },
-          { label: '2', value: '2', options: [{ label: '5', value: '5' }] },
+          { label: 'Foo', value: '1' },
+          {
+            label: 'Colours',
+            value: '2',
+            options: [
+              { label: 'Blue', value: '5' },
+              { label: 'Red', value: '6' },
+              { label: 'Black', value: '7' },
+              { label: 'Yellow', value: '8' },
+            ],
+          },
+          {
+            label: 'Animals',
+            value: '9',
+            options: [
+              { label: 'Cat', value: '10' },
+              { label: 'Cow', value: '11' },
+              { label: 'Dog', value: '12' },
+              { label: 'Eagle', value: '13' },
+            ],
+          },
+          { label: 'Bar', value: '3' },
         ]}
         value={value}
         onChange={(v) => {
@@ -216,25 +273,51 @@ export const MultiSelectWithOptionGroups: Story = (args) => {
         prefix={getPrefix(args.icon)}
         {...args}
       />
-    </>
+    </Field>
   );
 };
 
-export const MultiSelectBasic: Story = (args) => {
-  const [value, setValue] = useState<Array<SelectableValue<string>>>([]);
+export const MultiSelectWithOptionGroupsVirtualized: StoryFn = (args) => {
+  const [value, setValue] = useState<string[]>();
+  const id = useId();
 
   return (
-    <div style={{ maxWidth: '450px' }}>
+    <Field noMargin label="Select an option">
       <MultiSelect
-        options={generateOptions()}
+        inputId={id}
+        options={manyGroupedOptions}
+        virtualized
         value={value}
         onChange={(v) => {
-          setValue(v);
+          setValue(v.map((v) => v.value!));
           action('onChange')(v);
         }}
         prefix={getPrefix(args.icon)}
         {...args}
       />
+    </Field>
+  );
+};
+
+export const MultiSelectBasic: StoryFn = (args) => {
+  const [value, setValue] = useState<Array<SelectableValue<string>>>([]);
+  const id = useId();
+
+  return (
+    <div style={{ maxWidth: '450px' }}>
+      <Field noMargin label="Select an option">
+        <MultiSelect
+          inputId={id}
+          options={generateOptions()}
+          value={value}
+          onChange={(v) => {
+            setValue(v);
+            action('onChange')(v);
+          }}
+          prefix={getPrefix(args.icon)}
+          {...args}
+        />
+      </Field>
     </div>
   );
 };
@@ -246,52 +329,93 @@ MultiSelectBasic.args = {
   noMultiValueWrap: false,
 };
 
-export const MultiSelectAsync: Story = (args) => {
-  const [value, setValue] = useState<Array<SelectableValue<string>>>();
+export const MultiSelectBasicWithSelectAll: StoryFn = (args) => {
+  const [value, setValue] = useState<Array<SelectableValue<string>>>([]);
+  const id = useId();
 
   return (
-    <AsyncMultiSelect
-      loadOptions={loadAsyncOptions}
-      defaultOptions
-      value={value}
-      onChange={(v) => {
-        setValue(v);
-        action('onChange')(v);
-      }}
-      prefix={getPrefix(args.icon)}
-      {...args}
-    />
+    <div style={{ maxWidth: '450px' }}>
+      <Field noMargin label="Select an option">
+        <MultiSelect
+          inputId={id}
+          options={generateOptions()}
+          value={value}
+          toggleAllOptions={{ enabled: true }}
+          onChange={(v) => {
+            setValue(v);
+            action('onChange')(v);
+          }}
+          prefix={getPrefix(args.icon)}
+          {...args}
+        />
+      </Field>
+    </div>
+  );
+};
+
+MultiSelectBasicWithSelectAll.args = {
+  isClearable: false,
+  closeMenuOnSelect: false,
+  maxVisibleValues: 5,
+  noMultiValueWrap: false,
+};
+
+export const MultiSelectAsync: StoryFn = (args) => {
+  const [value, setValue] = useState<Array<SelectableValue<string>>>();
+  const id = useId();
+
+  return (
+    <Field noMargin label="Select an option">
+      <AsyncMultiSelect
+        inputId={id}
+        loadOptions={loadAsyncOptions}
+        defaultOptions
+        value={value}
+        onChange={(v) => {
+          setValue(v);
+          action('onChange')(v);
+        }}
+        prefix={getPrefix(args.icon)}
+        {...args}
+      />
+    </Field>
   );
 };
 MultiSelectAsync.args = {
   allowCustomValue: false,
 };
 
-export const BasicSelectAsync: Story = (args) => {
+export const BasicSelectAsync: StoryFn = (args) => {
   const [value, setValue] = useState<SelectableValue<string>>();
+  const id = useId();
 
   return (
-    <AsyncSelect
-      loadOptions={loadAsyncOptions}
-      defaultOptions
-      value={value}
-      onChange={(v) => {
-        setValue(v);
-        action('onChange')(v);
-      }}
-      prefix={getPrefix(args.icon)}
-      {...args}
-    />
+    <Field noMargin label="Select an option">
+      <AsyncSelect
+        inputId={id}
+        loadOptions={loadAsyncOptions}
+        defaultOptions
+        value={value}
+        onChange={(v) => {
+          setValue(v);
+          action('onChange')(v);
+        }}
+        prefix={getPrefix(args.icon)}
+        {...args}
+      />
+    </Field>
   );
 };
 
-export const AutoMenuPlacement: Story = (args) => {
+export const AutoMenuPlacement: StoryFn = (args) => {
   const [value, setValue] = useState<SelectableValue<string>>();
+  const id = useId();
 
   return (
-    <>
-      <div style={{ width: '100%', height: '95vh', display: 'flex', alignItems: 'flex-end' }}>
+    <div style={{ width: '100%', height: 'calc(95vh - 118px)', display: 'flex', alignItems: 'flex-end' }}>
+      <Field noMargin label="Select an option">
         <Select
+          inputId={id}
           options={generateOptions()}
           value={value}
           onChange={(v) => {
@@ -301,21 +425,23 @@ export const AutoMenuPlacement: Story = (args) => {
           prefix={getPrefix(args.icon)}
           {...args}
         />
-      </div>
-    </>
+      </Field>
+    </div>
   );
 };
 AutoMenuPlacement.args = {
   menuPlacement: auto,
 };
 
-export const WidthAuto: Story = (args) => {
+export const WidthAuto: StoryFn = (args) => {
   const [value, setValue] = useState<SelectableValue<string>>();
+  const id = useId();
 
   return (
-    <>
-      <div style={{ width: '100%' }}>
+    <div style={{ width: '100%' }}>
+      <Field noMargin label="Select an option">
         <Select
+          inputId={id}
           options={generateOptions()}
           value={value}
           onChange={(v) => {
@@ -326,18 +452,20 @@ export const WidthAuto: Story = (args) => {
           {...args}
           width="auto"
         />
-      </div>
-    </>
+      </Field>
+    </div>
   );
 };
 
-export const CustomValueCreation: Story = (args) => {
+export const CustomValueCreation: StoryFn = (args) => {
   const [value, setValue] = useState<SelectableValue<string>>();
   const [customOptions, setCustomOptions] = useState<Array<SelectableValue<string>>>([]);
   const options = generateOptions();
+  const id = useId();
   return (
-    <>
+    <Field noMargin label="Select an option">
       <Select
+        inputId={id}
         options={[...options, ...customOptions]}
         value={value}
         onChange={(v) => {
@@ -354,7 +482,7 @@ export const CustomValueCreation: Story = (args) => {
         prefix={getPrefix(args.icon)}
         {...args}
       />
-    </>
+    </Field>
   );
 };
 CustomValueCreation.args = {
@@ -362,3 +490,18 @@ CustomValueCreation.args = {
 };
 
 export default meta;
+
+function DeprecatedDecorator(Story: React.ElementType) {
+  return (
+    <div>
+      <Alert title="Deprecated!" severity="warning">
+        The Select component is deprecated.
+        <br />
+        Use Combobox instead - it supports most use cases, is performant by default, and can handle hundreds of
+        thousands of options, and has a simpler API.
+      </Alert>
+
+      <Story />
+    </div>
+  );
+}

@@ -1,4 +1,4 @@
-import { FALLBACK_COLOR, Field, FieldType, formattedValueToString } from '@grafana/data';
+import { FALLBACK_COLOR, Field, FieldType, formattedValueToString, getFieldColorModeForField } from '@grafana/data';
 import { SortOrder, TooltipDisplayMode } from '@grafana/schema';
 
 import { ColorIndicatorStyles } from './VizTooltipColorIndicator';
@@ -47,10 +47,10 @@ export const calculateTooltipPosition = (
 
 export const getColorIndicatorClass = (colorIndicator: string, styles: ColorIndicatorStyles) => {
   switch (colorIndicator) {
-    case ColorIndicator.value:
-      return styles.value;
     case ColorIndicator.series:
       return styles.series;
+    case ColorIndicator.value:
+      return styles.value;
     case ColorIndicator.hexagon:
       return styles.hexagon;
     case ColorIndicator.pie_1_4:
@@ -81,7 +81,9 @@ export const getContentItems = (
   seriesIdx: number | null | undefined,
   mode: TooltipDisplayMode,
   sortOrder: SortOrder,
-  fieldFilter = (field: Field) => true
+  fieldFilter = (field: Field) => true,
+  hideZeros = false,
+  _restFields?: Field[]
 ): VizTooltipItem[] => {
   let rows: VizTooltipItem[] = [];
 
@@ -94,8 +96,7 @@ export const getContentItems = (
       field === xField ||
       field.type === FieldType.time ||
       !fieldFilter(field) ||
-      field.config.custom?.hideFrom?.tooltip ||
-      field.config.custom?.hideFrom?.viz
+      field.config.custom?.hideFrom?.tooltip
     ) {
       continue;
     }
@@ -118,7 +119,7 @@ export const getContentItems = (
 
     const v = fields[i].values[dataIdx];
 
-    if (v == null && field.config.noValue == null) {
+    if ((v == null && field.config.noValue == null) || (hideZeros && v === 0)) {
       continue;
     }
 
@@ -131,16 +132,36 @@ export const getContentItems = (
         ? Number.MIN_SAFE_INTEGER
         : Number.MAX_SAFE_INTEGER;
 
+    const { colorIndicator, colorPlacement } = getIndicatorAndPlacement(field);
+
     rows.push({
       label: field.state?.displayName ?? field.name,
       value: formattedValueToString(display),
       color: display.color ?? FALLBACK_COLOR,
-      colorIndicator: ColorIndicator.series,
-      colorPlacement: ColorPlacement.first,
+      colorIndicator,
+      colorPlacement,
       isActive: mode === TooltipDisplayMode.Multi && seriesIdx === i,
       numeric,
+      lineStyle: field.config.custom?.lineStyle,
     });
   }
+
+  _restFields?.forEach((field) => {
+    if (!field.config.custom?.hideFrom?.tooltip) {
+      const { colorIndicator, colorPlacement } = getIndicatorAndPlacement(field);
+      const display = field.display!(field.values[dataIdxs[0]!]);
+
+      rows.push({
+        label: field.state?.displayName ?? field.name,
+        value: formattedValueToString(display),
+        color: FALLBACK_COLOR,
+        colorIndicator,
+        colorPlacement,
+        lineStyle: field.config.custom?.lineStyle,
+        isHiddenFromViz: true,
+      });
+    }
+  });
 
   if (sortOrder !== SortOrder.None && rows.length > 1) {
     const cmp = allNumeric ? numberCmp : stringCmp;
@@ -149,4 +170,18 @@ export const getContentItems = (
   }
 
   return rows;
+};
+
+const getIndicatorAndPlacement = (field: Field) => {
+  const colorMode = getFieldColorModeForField(field);
+
+  let colorIndicator = ColorIndicator.series;
+  let colorPlacement = ColorPlacement.first;
+
+  if (colorMode.isByValue) {
+    colorIndicator = ColorIndicator.value;
+    colorPlacement = ColorPlacement.trailing;
+  }
+
+  return { colorIndicator, colorPlacement };
 };

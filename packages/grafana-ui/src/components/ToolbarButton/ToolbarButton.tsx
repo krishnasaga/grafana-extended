@@ -1,15 +1,16 @@
 import { cx, css } from '@emotion/css';
-import React, { forwardRef, ButtonHTMLAttributes } from 'react';
+import { forwardRef, ButtonHTMLAttributes } from 'react';
+import * as React from 'react';
 
 import { GrafanaTheme2, IconName, isIconName } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
 
-import { styleMixins, useStyles2 } from '../../themes';
-import { getFocusStyles, getMouseFocusStyles } from '../../themes/mixins';
+import { useStyles2 } from '../../themes/ThemeContext';
+import { getFocusStyles, getMouseFocusStyles, mediaUp } from '../../themes/mixins';
 import { IconSize } from '../../types/icon';
-import { getPropertiesForVariant } from '../Button';
+import { getActiveButtonStyles, getPropertiesForVariant } from '../Button/Button';
 import { Icon } from '../Icon/Icon';
-import { Tooltip } from '../Tooltip';
+import { Tooltip } from '../Tooltip/Tooltip';
 
 type CommonProps = {
   /** Icon name */
@@ -85,6 +86,7 @@ export const ToolbarButton = forwardRef<HTMLButtonElement, ToolbarButtonProps>(
         className={buttonStyles}
         aria-label={getButtonAriaLabel(ariaLabel, tooltip)}
         aria-expanded={isOpen}
+        type="button"
         {...rest}
       >
         {renderIcon(icon, iconSize)}
@@ -132,10 +134,14 @@ const getStyles = (theme: GrafanaTheme2) => {
     color: theme.colors.text.primary,
     background: theme.colors.secondary.main,
 
-    '&:hover': {
+    '&:hover, &:focus': {
       color: theme.colors.text.primary,
       background: theme.colors.secondary.shade,
       border: `1px solid ${theme.colors.border.medium}`,
+    },
+
+    '&:active': {
+      ...getActiveButtonStyles(theme.colors.secondary, 'solid'),
     },
   });
 
@@ -152,9 +158,15 @@ const getStyles = (theme: GrafanaTheme2) => {
       fontWeight: theme.typography.fontWeightMedium,
       border: `1px solid ${theme.colors.secondary.border}`,
       whiteSpace: 'nowrap',
-      transition: theme.transitions.create(['background', 'box-shadow', 'border-color', 'color'], {
-        duration: theme.transitions.duration.short,
-      }),
+      [theme.transitions.handleMotion('no-preference', 'reduce')]: {
+        transition: theme.transitions.create(['background-color', 'border-color', 'color'], {
+          duration: theme.transitions.duration.short,
+        }),
+      },
+
+      [theme.breakpoints.down('md')]: {
+        width: 'auto !important',
+      },
 
       '&:focus, &:focus-visible': {
         ...getFocusStyles(theme),
@@ -162,10 +174,6 @@ const getStyles = (theme: GrafanaTheme2) => {
       },
 
       '&:focus:not(:focus-visible)': getMouseFocusStyles(theme),
-
-      '&:hover': {
-        boxShadow: theme.shadows.z1,
-      },
 
       '&[disabled], &:disabled': {
         cursor: 'not-allowed',
@@ -185,9 +193,13 @@ const getStyles = (theme: GrafanaTheme2) => {
       background: 'transparent',
       border: `1px solid transparent`,
 
-      '&:hover': {
+      '&:hover, &:focus': {
         color: theme.colors.text.primary,
-        background: theme.colors.background.secondary,
+        background: theme.colors.action.hover,
+      },
+
+      '&:active': {
+        ...getActiveButtonStyles(theme.colors.secondary, 'solid'),
       },
     }),
     canvas: defaultOld,
@@ -221,13 +233,14 @@ const getStyles = (theme: GrafanaTheme2) => {
       flexGrow: 1,
     }),
     content: css({
+      display: 'flex',
       flexGrow: 1,
     }),
     contentWithIcon: css({
       display: 'none',
       paddingLeft: theme.spacing(1),
 
-      [`@media ${styleMixins.mediaUp(theme.v1.breakpoints.md)}`]: {
+      [`@media ${mediaUp(theme.v1.breakpoints.md)}`]: {
         display: 'block',
       },
     }),

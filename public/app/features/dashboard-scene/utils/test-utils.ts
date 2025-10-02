@@ -1,8 +1,9 @@
+import { VariableRefresh } from '@grafana/data';
+import { FetchError } from '@grafana/runtime';
 import {
   DeepPartial,
   EmbeddedScene,
   SceneDeactivationHandler,
-  SceneGridItem,
   SceneGridLayout,
   SceneGridRow,
   SceneObject,
@@ -11,23 +12,52 @@ import {
   TestVariable,
   VizPanel,
 } from '@grafana/scenes';
+import {
+  defaultTimeSettingsSpec,
+  defaultPanelSpec,
+  Spec as DashboardV2Spec,
+  defaultSpec as defaultDashboardV2Spec,
+} from '@grafana/schema/dist/esm/schema/dashboard/v2';
 import { DashboardLoaderSrv, setDashboardLoaderSrv } from 'app/features/dashboard/services/DashboardLoaderSrv';
 import { ALL_VARIABLE_TEXT, ALL_VARIABLE_VALUE } from 'app/features/variables/constants';
-import { DashboardDTO } from 'app/types';
+import { DashboardDTO } from 'app/types/dashboard';
 
-import { LibraryVizPanel } from '../scene/LibraryVizPanel';
 import { VizPanelLinks, VizPanelLinksMenu } from '../scene/PanelLinks';
-import { PanelRepeaterGridItem, RepeatDirection } from '../scene/PanelRepeaterGridItem';
-import { RowRepeaterBehavior } from '../scene/RowRepeaterBehavior';
+import { DashboardGridItem, RepeatDirection } from '../scene/layout-default/DashboardGridItem';
+import { DefaultGridLayoutManager } from '../scene/layout-default/DefaultGridLayoutManager';
+import { RowRepeaterBehavior } from '../scene/layout-default/RowRepeaterBehavior';
+import { transformSaveModelSchemaV2ToScene } from '../serialization/transformSaveModelSchemaV2ToScene';
+import { transformSceneToSaveModelSchemaV2 } from '../serialization/transformSceneToSaveModelSchemaV2';
 
 export function setupLoadDashboardMock(rsp: DeepPartial<DashboardDTO>, spy?: jest.Mock) {
   const loadDashboardMock = (spy || jest.fn()).mockResolvedValue(rsp);
+  const loadSnapshotMock = (spy || jest.fn()).mockResolvedValue(rsp);
+  // disabling type checks since this is a test util
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
   setDashboardLoaderSrv({
     loadDashboard: loadDashboardMock,
-    // disabling type checks since this is a test util
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+    loadSnapshot: loadSnapshotMock,
   } as unknown as DashboardLoaderSrv);
   return loadDashboardMock;
+}
+export function setupLoadDashboardMockReject(rsp: DeepPartial<FetchError>, spy?: jest.Mock) {
+  const loadDashboardMock = (spy || jest.fn()).mockRejectedValue(rsp);
+  // disabling type checks since this is a test util
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+  setDashboardLoaderSrv({
+    loadDashboard: loadDashboardMock,
+  } as unknown as DashboardLoaderSrv);
+  return loadDashboardMock;
+}
+
+export function setupLoadDashboardRuntimeErrorMock() {
+  // disabling type checks since this is a test util
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+  setDashboardLoaderSrv({
+    loadDashboard: () => {
+      throw new Error('Runtime error');
+    },
+  } as unknown as DashboardLoaderSrv);
 }
 
 export function mockResizeObserver() {
@@ -36,6 +66,8 @@ export function mockResizeObserver() {
       setTimeout(() => {
         callback(
           [
+            // disabling type checks since this is a test util
+            // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
             {
               contentRect: {
                 x: 1,
@@ -47,8 +79,6 @@ export function mockResizeObserver() {
                 left: 100,
                 right: 0,
               },
-              // disabling type checks since this is a test util
-              // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
             } as ResizeObserverEntry,
           ],
           this
@@ -68,6 +98,11 @@ export function mockResizeObserver() {
  */
 export function activateFullSceneTree(scene: SceneObject): SceneDeactivationHandler {
   const deactivationHandlers: SceneDeactivationHandler[] = [];
+
+  // Important that variables are activated before other children
+  if (scene.state.$variables) {
+    deactivationHandlers.push(activateFullSceneTree(scene.state.$variables));
+  }
 
   scene.forEachChild((child) => {
     // For query runners which by default use the container width for maxDataPoints calculation we are setting a width.
@@ -98,28 +133,31 @@ interface SceneOptions {
   numberOfOptions?: number;
   usePanelRepeater?: boolean;
   useRowRepeater?: boolean;
+  throwError?: string;
+  variableRefresh?: VariableRefresh;
 }
 
-export function buildPanelRepeaterScene(options: SceneOptions, source?: VizPanel | LibraryVizPanel) {
+export function buildPanelRepeaterScene(options: SceneOptions, source?: VizPanel) {
   const defaults = { usePanelRepeater: true, ...options };
 
-  const repeater = new PanelRepeaterGridItem({
+  const withRepeat = new DashboardGridItem({
     variableName: 'server',
     repeatedPanels: [],
     repeatDirection: options.repeatDirection,
     maxPerRow: options.maxPerRow,
     itemHeight: options.itemHeight,
-    source:
+    body:
       source ??
       new VizPanel({
         title: 'Panel $server',
         pluginId: 'timeseries',
+        key: 'panel-1',
       }),
     x: options.x || 0,
     y: options.y || 0,
   });
 
-  const gridItem = new SceneGridItem({
+  const withoutRepeat = new DashboardGridItem({
     x: 0,
     y: 0,
     width: 10,
@@ -131,18 +169,9 @@ export function buildPanelRepeaterScene(options: SceneOptions, source?: VizPanel
     }),
   });
 
-  const rowChildren = defaults.usePanelRepeater ? repeater : gridItem;
-
   const row = new SceneGridRow({
-    $behaviors: defaults.useRowRepeater
-      ? [
-          new RowRepeaterBehavior({
-            variableName: 'handler',
-            sources: [rowChildren],
-          }),
-        ]
-      : [],
-    children: defaults.useRowRepeater ? [] : [rowChildren],
+    $behaviors: defaults.useRowRepeater ? [new RowRepeaterBehavior({ variableName: 'handler' })] : [],
+    children: [defaults.usePanelRepeater ? withRepeat : withoutRepeat],
   });
 
   const panelRepeatVariable = new TestVariable({
@@ -160,6 +189,8 @@ export function buildPanelRepeaterScene(options: SceneOptions, source?: VizPanel
       { label: 'D', value: '4' },
       { label: 'E', value: '5' },
     ].slice(0, options.numberOfOptions),
+    throwError: defaults.throwError,
+    refresh: options.variableRefresh,
   });
 
   const rowRepeatVariable = new TestVariable({
@@ -177,6 +208,7 @@ export function buildPanelRepeaterScene(options: SceneOptions, source?: VizPanel
       { label: 'DD', value: '44' },
       { label: 'EE', value: '55' },
     ].slice(0, options.numberOfOptions),
+    throwError: defaults.throwError,
   });
 
   const scene = new EmbeddedScene({
@@ -184,10 +216,98 @@ export function buildPanelRepeaterScene(options: SceneOptions, source?: VizPanel
     $variables: new SceneVariableSet({
       variables: [panelRepeatVariable, rowRepeatVariable],
     }),
-    body: new SceneGridLayout({
-      children: [row],
+    body: new DefaultGridLayoutManager({
+      grid: new SceneGridLayout({
+        children: [row],
+      }),
     }),
   });
 
-  return { scene, repeater, row, variable: panelRepeatVariable };
+  return { scene, repeater: withRepeat, row, variable: panelRepeatVariable };
+}
+
+export function getTestDashboardSceneFromSaveModel(spec?: Partial<DashboardV2Spec>) {
+  const dashboard = transformSaveModelSchemaV2ToScene({
+    kind: 'DashboardWithAccessInfo',
+    spec: {
+      ...defaultDashboardV2Spec(),
+      title: 'hello',
+      timeSettings: {
+        ...defaultTimeSettingsSpec(),
+        autoRefresh: '10s',
+        from: 'now-1h',
+        to: 'now',
+      },
+      elements: {
+        'panel-1': {
+          kind: 'Panel',
+          spec: {
+            ...defaultPanelSpec(),
+            id: 1,
+            title: 'Panel 1',
+          },
+        },
+      },
+      layout: {
+        kind: 'GridLayout',
+        spec: {
+          items: [
+            {
+              kind: 'GridLayoutItem',
+              spec: {
+                x: 0,
+                y: 0,
+                width: 12,
+                height: 8,
+                element: {
+                  kind: 'ElementReference',
+                  name: 'panel-1',
+                },
+              },
+            },
+          ],
+        },
+      },
+      variables: [
+        {
+          kind: 'CustomVariable',
+          spec: {
+            name: 'app',
+            label: 'Query Variable',
+            description: 'A query variable',
+            skipUrlSync: false,
+            hide: 'dontHide',
+            options: [],
+            multi: false,
+            current: {
+              text: 'app1',
+              value: 'app1',
+            },
+            query: 'app1',
+            allValue: '',
+            includeAll: false,
+            allowCustomValue: true,
+          },
+        },
+      ],
+      ...spec,
+    },
+    apiVersion: 'v1',
+    metadata: {
+      name: 'dashboard-test',
+      resourceVersion: '1',
+      creationTimestamp: '2023-01-01T00:00:00Z',
+    },
+    access: {
+      canEdit: true,
+      canSave: true,
+      canStar: true,
+      canShare: true,
+    },
+  });
+
+  const initialSaveModel = transformSceneToSaveModelSchemaV2(dashboard);
+  dashboard.setInitialSaveModel(initialSaveModel);
+
+  return dashboard;
 }

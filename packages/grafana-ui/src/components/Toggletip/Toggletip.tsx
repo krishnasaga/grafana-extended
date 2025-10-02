@@ -2,22 +2,22 @@ import { css, cx } from '@emotion/css';
 import {
   arrow,
   autoUpdate,
-  flip,
   FloatingArrow,
   FloatingFocusManager,
   offset,
-  shift,
   useClick,
   useDismiss,
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
 import { Placement } from '@popperjs/core';
-import React, { useRef, useState } from 'react';
+import { memo, cloneElement, isValidElement, useRef, useState } from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
+import { t } from '@grafana/i18n';
 
 import { useStyles2, useTheme2 } from '../../themes/ThemeContext';
+import { getPositioningMiddleware } from '../../utils/floating';
 import { buildTooltipTheme, getPlacement } from '../../utils/tooltipUtils';
 import { IconButton } from '../IconButton/IconButton';
 
@@ -48,7 +48,7 @@ export interface ToggletipProps {
   onOpen?: () => void;
 }
 
-export const Toggletip = React.memo(
+export const Toggletip = memo(
   ({
     children,
     theme = 'info',
@@ -68,19 +68,14 @@ export const Toggletip = React.memo(
     const style = styles[theme];
     const [controlledVisible, setControlledVisible] = useState(show);
     const isOpen = show ?? controlledVisible;
+    const floatingUIPlacement = getPlacement(placement);
 
     // the order of middleware is important!
     // `arrow` should almost always be at the end
     // see https://floating-ui.com/docs/arrow#order
     const middleware = [
       offset(8),
-      flip({
-        fallbackAxisSideDirection: 'end',
-        // see https://floating-ui.com/docs/flip#combining-with-shift
-        crossAxis: false,
-        boundary: document.body,
-      }),
-      shift(),
+      ...getPositioningMiddleware(floatingUIPlacement),
       arrow({
         element: arrowRef,
       }),
@@ -88,7 +83,7 @@ export const Toggletip = React.memo(
 
     const { context, refs, floatingStyles } = useFloating({
       open: isOpen,
-      placement: getPlacement(placement),
+      placement: floatingUIPlacement,
       onOpenChange: (open) => {
         if (show === undefined) {
           setControlledVisible(open);
@@ -111,7 +106,7 @@ export const Toggletip = React.memo(
 
     return (
       <>
-        {React.cloneElement(children, {
+        {cloneElement(children, {
           ref: refs.setReference,
           tabIndex: 0,
           'aria-expanded': isOpen,
@@ -139,7 +134,7 @@ export const Toggletip = React.memo(
               {closeButton && (
                 <div className={style.headerClose}>
                   <IconButton
-                    aria-label="Close"
+                    aria-label={t('grafana-ui.toggletip.close', 'Close')}
                     name="times"
                     data-testid="toggletip-header-close"
                     onClick={() => {
@@ -150,7 +145,7 @@ export const Toggletip = React.memo(
                 </div>
               )}
               <div className={style.body}>
-                {(typeof content === 'string' || React.isValidElement(content)) && content}
+                {(typeof content === 'string' || isValidElement(content)) && content}
                 {typeof content === 'function' && content({})}
               </div>
               {Boolean(footer) && <div className={style.footer}>{footer}</div>}

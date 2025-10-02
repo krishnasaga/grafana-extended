@@ -1,15 +1,18 @@
 import { css } from '@emotion/css';
-import React, { ComponentType, useEffect } from 'react';
+import { ComponentType, useEffect } from 'react';
 import { connect, ConnectedProps } from 'react-redux';
 
 import { GrafanaTheme2 } from '@grafana/data';
 import { selectors as e2eSelectors } from '@grafana/e2e-selectors/src';
-import { LinkButton, RadioButtonGroup, useStyles2, FilterInput } from '@grafana/ui';
+import { Trans, t } from '@grafana/i18n';
+import { LinkButton, RadioButtonGroup, useStyles2, FilterInput, EmptyState } from '@grafana/ui';
 import { Page } from 'app/core/components/Page/Page';
 import { contextSrv } from 'app/core/core';
+import { AccessControlAction } from 'app/types/accessControl';
+import { StoreState } from 'app/types/store';
+import { UserFilter } from 'app/types/user';
 
-import { AccessControlAction, StoreState, UserFilter } from '../../types';
-
+import { EnterpriseAuthFeaturesCard } from './EnterpriseAuthFeaturesCard';
 import { UsersTable } from './Users/UsersTable';
 import { changeFilter, changePage, changeQuery, changeSort, fetchUsers } from './state/actions';
 
@@ -40,6 +43,7 @@ const mapStateToProps = (state: StoreState) => ({
   totalPages: state.userListAdmin.totalPages,
   page: state.userListAdmin.page,
   filters: state.userListAdmin.filters,
+  isLoading: state.userListAdmin.isLoading,
 });
 
 const connector = connect(mapStateToProps, mapDispatchToProps);
@@ -60,6 +64,7 @@ const UserListAdminPageUnConnected = ({
   page,
   changePage,
   changeSort,
+  isLoading,
 }: Props) => {
   const styles = useStyles2(getStyles);
 
@@ -72,15 +77,22 @@ const UserListAdminPageUnConnected = ({
       <div className={styles.actionBar} data-testid={selectors.container}>
         <div className={styles.row}>
           <FilterInput
-            placeholder="Search user by login, email, or name."
+            placeholder={t(
+              'admin.user-list-admin-page-un-connected.placeholder-search-login-email',
+              'Search user by login, email, or name.'
+            )}
             autoFocus={true}
             value={query}
             onChange={changeQuery}
+            escapeRegex={false}
           />
           <RadioButtonGroup
             options={[
-              { label: 'All users', value: false },
-              { label: 'Active last 30 days', value: true },
+              { label: t('admin.user-list-admin-page-un-connected.label.all-users', 'All users'), value: false },
+              {
+                label: t('admin.user-list-admin-page-un-connected.label.active-last-days', 'Active last 30 days'),
+                value: true,
+              },
             ]}
             onChange={(value) => changeFilter({ name: 'activeLast30Days', value })}
             value={filters.find((f) => f.name === 'activeLast30Days')?.value}
@@ -91,19 +103,24 @@ const UserListAdminPageUnConnected = ({
           ))}
           {contextSrv.hasPermission(AccessControlAction.UsersCreate) && (
             <LinkButton href="admin/users/create" variant="primary">
-              New user
+              <Trans i18nKey="admin.users-list.create-button">New user</Trans>
             </LinkButton>
           )}
         </div>
       </div>
-      <UsersTable
-        users={users}
-        showPaging={showPaging}
-        totalPages={totalPages}
-        onChangePage={changePage}
-        currentPage={page}
-        fetchData={changeSort}
-      />
+      {!isLoading && users.length === 0 ? (
+        <EmptyState message={t('users.empty-state.message', 'No users found')} variant="not-found" />
+      ) : (
+        <UsersTable
+          users={users}
+          showPaging={showPaging}
+          totalPages={totalPages}
+          onChangePage={changePage}
+          currentPage={page}
+          fetchData={changeSort}
+        />
+      )}
+      <EnterpriseAuthFeaturesCard page="users" />
     </Page.Contents>
   );
 };

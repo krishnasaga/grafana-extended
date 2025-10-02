@@ -39,8 +39,11 @@ type DatabaseConfig struct {
 	WALEnabled                  bool
 	UrlQueryParams              map[string][]string
 	SkipMigrations              bool
+	EnsureDefaultOrgAndUser     bool
+	MigrationLock               bool
 	MigrationLockAttemptTimeout int
 	LogQueries                  bool
+	DeleteAutoGenIDs            bool
 	// SQLite only
 	QueryRetries int
 	// SQLite only
@@ -91,6 +94,9 @@ func (dbCfg *DatabaseConfig) readConfig(cfg *setting.Cfg) error {
 	} else {
 		dbCfg.Type = sec.Key("type").String()
 		dbCfg.Host = sec.Key("host").String()
+		if port := sec.Key("port").String(); port != "" {
+			dbCfg.Host = dbCfg.Host + ":" + port
+		}
 		dbCfg.Name = sec.Key("name").String()
 		dbCfg.User = sec.Key("user").String()
 		dbCfg.ConnectionString = sec.Key("connection_string").String()
@@ -113,12 +119,15 @@ func (dbCfg *DatabaseConfig) readConfig(cfg *setting.Cfg) error {
 	dbCfg.CacheMode = sec.Key("cache_mode").MustString("private")
 	dbCfg.WALEnabled = sec.Key("wal").MustBool(false)
 	dbCfg.SkipMigrations = sec.Key("skip_migrations").MustBool()
+	dbCfg.EnsureDefaultOrgAndUser = sec.Key("ensure_default_org_and_user").MustBool(true)
+	dbCfg.MigrationLock = sec.Key("migration_locking").MustBool(true)
 	dbCfg.MigrationLockAttemptTimeout = sec.Key("locking_attempt_timeout_sec").MustInt()
 
 	dbCfg.QueryRetries = sec.Key("query_retries").MustInt()
 	dbCfg.TransactionRetries = sec.Key("transaction_retries").MustInt(5)
 
 	dbCfg.LogQueries = sec.Key("log_queries").MustBool(false)
+	dbCfg.DeleteAutoGenIDs = sec.Key("delete_auto_gen_ids").MustBool(false)
 
 	return nil
 }
@@ -190,7 +199,7 @@ func (dbCfg *DatabaseConfig) buildConnectionString(cfg *setting.Cfg, features fe
 		if !filepath.IsAbs(dbCfg.Path) {
 			dbCfg.Path = filepath.Join(cfg.DataPath, dbCfg.Path)
 		}
-		if err := os.MkdirAll(path.Dir(dbCfg.Path), os.ModePerm); err != nil {
+		if err := os.MkdirAll(path.Dir(dbCfg.Path), 0o750); err != nil {
 			return err
 		}
 

@@ -16,6 +16,27 @@ labels:
 menuTitle: Configure Elasticsearch
 title: Configure the Elasticsearch data source
 weight: 200
+refs:
+  administration-documentation:
+    - pattern: /docs/grafana/
+      destination: /docs/grafana/<GRAFANA_VERSION>/administration/data-source-management/
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana/<GRAFANA_VERSION>/administration/data-source-management/
+  supported-expressions:
+    - pattern: /docs/grafana/
+      destination: /docs/grafana/<GRAFANA_VERSION>/explore/logs-integration/#log-level
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana/<GRAFANA_VERSION>/explore/logs-integration/#log-level
+  query-and-transform-data:
+    - pattern: /docs/grafana/
+      destination: /docs/grafana/<GRAFANA_VERSION>/panels-visualizations/query-transform-data/
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/visualizations/panels-visualizations/query-transform-data/
+  provisioning-data-source:
+    - pattern: /docs/grafana/
+      destination: /docs/grafana/<GRAFANA_VERSION>/datasources/elasticsearch/#provision-the-data-source
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/connect-externally-hosted/data-sources/elasticsearch/#provision-the-data-source
 ---
 
 # Configure the Elasticsearch data source
@@ -23,10 +44,18 @@ weight: 200
 Grafana ships with built-in support for Elasticsearch.
 You can create a variety of queries to visualize logs or metrics stored in Elasticsearch, and annotate graphs with log events stored in Elasticsearch.
 
-For instructions on how to add a data source to Grafana, refer to the [administration documentation][].
+For instructions on how to add a data source to Grafana, refer to the [administration documentation](ref:administration-documentation).
 
 Only users with the organization `administrator` role can add data sources.
-Administrators can also [configure the data source via YAML](#provision-the-data-source) with Grafana's provisioning system.
+Administrators can also [configure the data source via YAML](ref:provisioning-data-source) with Grafana's provisioning system.
+
+## Configuring permissions
+
+When Elasticsearch security features are enabled, it is essential to configure the necessary cluster privileges to ensure seamless operation. Below is a list of the required privileges along with their purposes:
+
+- **monitor** - Necessary to retrieve the version information of the connected Elasticsearch instance.
+- **view_index_metadata** - Required for accessing mapping definitions of indices.
+- **read** - Grants the ability to perform search and retrieval operations on indices. This is essential for querying and extracting data from the cluster.
 
 ## Add the data source
 
@@ -71,9 +100,9 @@ Select one of the following authentication methods from the dropdown menu.
 
 ### TLS settings
 
-{{% admonition type="note" %}}
+{{< admonition type="note" >}}
 Use TLS (Transport Layer Security) for an additional layer of security when working with Elasticsearch. For information on setting up TLS encryption with Elasticsearch see [Configure TLS](https://www.elastic.co/guide/en/elasticsearch/reference/8.8/configuring-tls.html#configuring-tls). You must add TLS settings to your Elasticsearch configuration file **prior** to setting these options in Grafana.
-{{% /admonition %}}
+{{< /admonition >}}
 
 - **Add self-signed certificate** - Check the box to authenticate with a CA certificate. Follow the instructions of the CA (Certificate Authority) to download the certificate file. Required for verifying self-signed TLS certificates.
 
@@ -103,16 +132,17 @@ Additional settings are optional settings that can be configured for more contro
 
 The following settings are specific to the Elasticsearch data source.
 
-- **Index name** - Use the index settings to specify a default for the `time field` and your Elasticsearch index's name. You can use a time pattern, such as `YYYY.MM.DD`, or a wildcard for the index name.
+- **Index name** - Use the index settings to specify a default for the `time field` and your Elasticsearch index's name. You can use a time pattern, for example `[logstash-]YYYY.MM.DD`, or a wildcard for the index name. When specifying a time pattern, the fixed part(s) of the pattern should be wrapped in square brackets.
 
 - **Pattern** - Select the matching pattern if using one in your index name. Options include:
-
   - no pattern
   - hourly
   - daily
   - weekly
   - monthly
   - yearly
+
+Only select a pattern option if you have specified a time pattern in the Index name field.
 
 - **Time field name** - Name of the time field. The default value is @timestamp. You can enter a different name.
 
@@ -136,13 +166,13 @@ For example, set this to `1m` if Elasticsearch writes data every minute.
 
 You can also override this setting in a dashboard panel under its data source options. The default is `10s`.
 
-- **X-Pack enabled** - Toggle to enable `X-Pack`-specific features and options, which provide the [query editor]({{< relref "./query-editor" >}}) with additional aggregations, such as `Rate` and `Top Metrics`.
+- **X-Pack enabled** - Toggle to enable `X-Pack`-specific features and options, which provide the [query editor](../query-editor/) with additional aggregations, such as `Rate` and `Top Metrics`.
 
 - **Include frozen indices** - Toggle on when the `X-Pack enabled` setting is active. Includes frozen indices in searches. You can configure Grafana to include [frozen indices](https://www.elastic.co/guide/en/elasticsearch/reference/7.13/frozen-indices.html) when performing search requests.
 
-{{% admonition type="note" %}}
+{{< admonition type="note" >}}
 Frozen indices are [deprecated in Elasticsearch](https://www.elastic.co/guide/en/elasticsearch/reference/7.17/frozen-indices.html) since v7.14.
-{{% /admonition %}}
+{{< /admonition >}}
 
 ### Logs
 
@@ -150,7 +180,7 @@ In this section you can configure which fields the data source uses for log mess
 
 - **Message field name:** - Grabs the actual log message from the default source.
 
-- **Level field name:** - Name of the field with log level/severity information. When a level label is specified, the value of this label is used to determine the log level and update the color of each log line accordingly. If the log doesn’t have a specified level label, we try to determine if its content matches any of the [supported expressions][]. The first match always determines the log level. If Grafana cannot infer a log-level field, it will be visualized with an unknown log level.
+- **Level field name:** - Name of the field with log level/severity information. When a level label is specified, the value of this label is used to determine the log level and update the color of each log line accordingly. If the log doesn’t have a specified level label, we try to determine if its content matches any of the [supported expressions](ref:supported-expressions). The first match always determines the log level. If Grafana cannot infer a log-level field, it will be visualized with an unknown log level.
 
 ### Data links
 
@@ -170,17 +200,8 @@ Each data link configuration consists of:
 
 Use private data source connect (PDC) to connect to and query data within a secure network without opening that network to inbound traffic from Grafana Cloud. See [Private data source connect](https://grafana.com/docs/grafana-cloud/connect-externally-hosted/private-data-source-connect/) for more information on how PDC works and [Configure Grafana private data source connect (PDC)](https://grafana.com/docs/grafana-cloud/connect-externally-hosted/private-data-source-connect/configure-pdc/#configure-grafana-private-data-source-connect-pdc) for steps on setting up a PDC connection.
 
+If you use PDC with SIGv4 (AWS Signature Version 4 Authentication), the PDC agent must allow internet egress to`sts.<region>.amazonaws.com:443`.
+
 - **Private data source connect** - Click in the box to set the default PDC connection from the dropdown menu or create a new connection.
 
 Once you have configured your Elasticsearch data source options, click **Save & test** at the bottom to test out your data source connection. You can also remove a connection by clicking **Delete**.
-
-{{% docs/reference %}}
-[administration documentation]: "/docs/grafana/ -> /docs/grafana/<GRAFANA VERSION>/administration/data-source-management"
-[administration documentation]: "/docs/grafana-cloud/ -> /docs/grafana/<GRAFANA VERSION>/administration/data-source-management"
-
-[Query and transform data]: "/docs/grafana/ -> /docs/grafana/<GRAFANA VERSION>/panels-visualizations/query-transform-data"
-[Query and transform data]: "/docs/grafana-cloud/ -> /docs/grafana-cloud/visualizations/panels-visualizations/query-transform-data"
-
-[supported expressions]: "/docs/grafana/ -> /docs/grafana/<GRAFANA VERSION>/explore/logs-integration#log-level"
-[supported expressions]: "/docs/grafana-cloud/ -> /docs/grafana/<GRAFANA VERSION>/explore/logs-integration#log-level"
-{{% /docs/reference %}}

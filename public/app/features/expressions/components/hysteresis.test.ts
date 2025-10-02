@@ -125,7 +125,7 @@ describe('thresholdReducer', () => {
   };
 
   it('should return initial state', () => {
-    expect(thresholdReducer(undefined, { type: undefined })).toEqual({
+    expect(thresholdReducer(undefined, { type: '' })).toEqual({
       type: ExpressionQueryType.threshold,
       conditions: [],
       refId: '',
@@ -159,7 +159,7 @@ describe('thresholdReducer', () => {
     expect(newState.conditions[0].evaluator.type).toEqual(EvalFunction.IsBelow);
     expect(newState.conditions[0].unloadEvaluator?.type).toEqual(EvalFunction.IsAbove);
     expect(onError).toHaveBeenCalledWith(undefined);
-    expect(newState.conditions[0].unloadEvaluator?.params[0]).toEqual(10);
+    expect(newState.conditions[0].unloadEvaluator?.params[0]).toEqual(0);
   });
   it('Should update unlooadEvaluator when checking hysteresis', () => {
     const initialState: ThresholdExpressionQuery = {

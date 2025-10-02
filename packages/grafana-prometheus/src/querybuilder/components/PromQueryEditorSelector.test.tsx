@@ -1,13 +1,13 @@
+// Core Grafana history https://github.com/grafana/grafana/blob/v11.0.0-preview/public/app/plugins/datasource/prometheus/querybuilder/components/PromQueryEditorSelector.test.tsx
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { cloneDeep, defaultsDeep } from 'lodash';
-import React from 'react';
 
 import { CoreApp, PluginMeta, PluginType } from '@grafana/data';
 
 import { PromQueryEditorProps } from '../../components/types';
 import { PrometheusDatasource } from '../../datasource';
-import PromQlLanguageProvider from '../../language_provider';
+import { PrometheusLanguageProviderInterface } from '../../language_provider';
 import { EmptyLanguageProviderMock } from '../../language_provider.mock';
 import { PromQuery } from '../../types';
 import { QueryEditorMode } from '../shared/types';
@@ -20,18 +20,6 @@ jest.mock('../../components/monaco-query-field/MonacoQueryFieldWrapper', () => {
   return {
     MonacoQueryFieldWrapper: () => {
       return 'MonacoQueryFieldWrapper';
-    },
-  };
-});
-
-jest.mock('app/core/store', () => {
-  return {
-    get() {
-      return undefined;
-    },
-    set() {},
-    getObject(key: string, defaultValue: unknown) {
-      return defaultValue;
     },
   };
 });
@@ -84,7 +72,7 @@ const getDefaultDatasource = (jsonDataOverrides = {}) =>
       readOnly: false,
     },
     undefined,
-    new EmptyLanguageProviderMock() as unknown as PromQlLanguageProvider
+    new EmptyLanguageProviderMock() as unknown as PrometheusLanguageProviderInterface
   );
 
 const defaultProps = {
@@ -141,7 +129,7 @@ describe('PromQueryEditorSelector', () => {
   it('changes to builder mode', async () => {
     const { onChange } = renderWithMode(QueryEditorMode.Code);
     await switchToMode(QueryEditorMode.Builder);
-    expect(onChange).toBeCalledWith({
+    expect(onChange).toHaveBeenCalledWith({
       refId: 'A',
       expr: defaultQuery.expr,
       range: true,
@@ -167,7 +155,7 @@ describe('PromQueryEditorSelector', () => {
   it('changes to code mode', async () => {
     const { onChange } = renderWithMode(QueryEditorMode.Builder);
     await switchToMode(QueryEditorMode.Code);
-    expect(onChange).toBeCalledWith({
+    expect(onChange).toHaveBeenCalledWith({
       refId: 'A',
       expr: defaultQuery.expr,
       range: true,

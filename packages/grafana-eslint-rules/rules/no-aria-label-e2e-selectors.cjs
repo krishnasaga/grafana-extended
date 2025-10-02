@@ -2,22 +2,21 @@
 const { ESLintUtils } = require('@typescript-eslint/utils');
 
 /**
- * @typedef {import("@typescript-eslint/types/dist/generated/ast-spec").Expression} Expression
- * @typedef {import("@typescript-eslint/types/dist/generated/ast-spec").JSXEmptyExpression } JSXEmptyExpression
- * @typedef {import("@typescript-eslint/types/dist/generated/ast-spec").PrivateIdentifier } PrivateIdentifier
- * @typedef {import("@typescript-eslint/types/dist/generated/ast-spec").MemberExpressionComputedName } MemberExpressionComputedName
- * @typedef {import("@typescript-eslint/types/dist/generated/ast-spec").MemberExpressionNonComputedName } MemberExpressionNonComputedName
- * @typedef {import('@typescript-eslint/types/dist/generated/ast-spec').Identifier} Identifier
+ * @typedef {import("@typescript-eslint/utils").TSESTree.Expression} Expression
+ * @typedef {import('@typescript-eslint/utils').TSESTree.JSXEmptyExpression } JSXEmptyExpression
+ * @typedef {import('@typescript-eslint/utils').TSESTree.PrivateIdentifier } PrivateIdentifier
+ * @typedef {import('@typescript-eslint/utils').TSESTree.MemberExpressionComputedName } MemberExpressionComputedName
+ * @typedef {import('@typescript-eslint/utils').TSESTree.MemberExpressionNonComputedName } MemberExpressionNonComputedName
+ * @typedef {import('@typescript-eslint/utils').TSESTree.Identifier} Identifier
  *
- * @typedef {import("@typescript-eslint/utils/dist/ts-eslint/Scope").Scope.Scope } Scope
- * @typedef {import("@typescript-eslint/utils/dist/ts-eslint/Scope").Scope.Variable } Variable
+ * @typedef {import('@typescript-eslint/utils').TSESLint.Scope.Scope} Scope
+ * @typedef {import('@typescript-eslint/utils').TSESLint.Scope.Variable} Variable
  */
 
 const GRAFANA_E2E_PACKAGE_NAME = '@grafana/e2e-selectors';
 
 const createRule = ESLintUtils.RuleCreator(
-  // TODO: find a proper url?
-  (name) => `https://github.com/grafana/grafana#${name}`
+  (name) => `https://github.com/grafana/grafana/blob/main/packages/grafana-eslint-rules/README.md#${name}`
 );
 
 // A relative simple lint rule that will look of the `selectors` export from @grafana/e2e-selectors
@@ -42,7 +41,7 @@ const rule = createRule({
         const identifiers = findIdentifiers(node.value.expression);
 
         for (const identifier of identifiers) {
-          const scope = context.getScope();
+          const scope = context.sourceCode.getScope(node);
 
           // Find the actual "scoped variable" to inspect it's import
           // This is relatively fragile, and will fail to find the import if the variable is reassigned
@@ -51,7 +50,7 @@ const rule = createRule({
             (v) =>
               v.type === 'ImportBinding' &&
               v.parent.type === 'ImportDeclaration' &&
-              v.parent.source.value === GRAFANA_E2E_PACKAGE_NAME
+              v.parent.source.value.startsWith(GRAFANA_E2E_PACKAGE_NAME)
           );
 
           if (importDef) {
@@ -69,7 +68,6 @@ const rule = createRule({
   meta: {
     docs: {
       description: 'aria-label should not contain e2e selectors',
-      recommended: 'error',
     },
     messages: {
       useDataTestId: 'Use data-testid for E2E selectors instead of aria-label',
@@ -145,4 +143,6 @@ function findVariableInScope(initialScope, variableName) {
 
     scope = scope.upper;
   }
+
+  return undefined;
 }

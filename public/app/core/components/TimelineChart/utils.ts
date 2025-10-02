@@ -1,9 +1,5 @@
-import React from 'react';
-import uPlot from 'uplot';
-
 import {
   DataFrame,
-  DashboardCursorSync,
   FALLBACK_COLOR,
   Field,
   FieldColorModeId,
@@ -20,10 +16,14 @@ import {
   TimeRange,
   cacheFieldDisplayNames,
   outerJoinDataFrames,
+  ValueMapping,
+  ThresholdsConfig,
+  applyNullInsertThreshold,
+  nullToValue,
+  SpecialValueMatch,
 } from '@grafana/data';
-import { maybeSortFrame, NULL_RETAIN } from '@grafana/data/src/transformations/transformers/joinDataFrames';
-import { applyNullInsertThreshold } from '@grafana/data/src/transformations/transformers/nulls/nullInsertThreshold';
-import { nullToValue } from '@grafana/data/src/transformations/transformers/nulls/nullToValue';
+import { maybeSortFrame, NULL_RETAIN } from '@grafana/data/internal';
+import { t } from '@grafana/i18n';
 import {
   VizLegendOptions,
   AxisPlacement,
@@ -34,15 +34,8 @@ import {
   HideableFieldConfig,
   MappingType,
 } from '@grafana/schema';
-import {
-  FIXED_UNIT,
-  SeriesVisibilityChangeMode,
-  UPlotConfigBuilder,
-  UPlotConfigPrepFn,
-  VizLegendItem,
-} from '@grafana/ui';
-import { PlotTooltipInterpolator } from '@grafana/ui/src/components/uPlot/types';
-import { preparePlotData2, getStackingGroups } from '@grafana/ui/src/components/uPlot/utils';
+import { FIXED_UNIT, UPlotConfigBuilder, UPlotConfigPrepFn, VizLegendItem } from '@grafana/ui';
+import { preparePlotData2, getStackingGroups } from '@grafana/ui/internal';
 
 import { getConfig, TimelineCoreOptions } from './timeline';
 
@@ -53,16 +46,14 @@ interface UPlotConfigOptions {
   frame: DataFrame;
   theme: GrafanaTheme2;
   mode: TimelineMode;
-  sync?: () => DashboardCursorSync;
   rowHeight?: number;
   colWidth?: number;
   showValue: VisibilityMode;
   alignValue?: TimelineValueAlignment;
   mergeValues?: boolean;
   getValueColor: (frameIdx: number, fieldIdx: number, value: unknown) => string;
-  // Identifies the shared key for uPlot cursor sync
-  eventsScope?: string;
   hoverMulti: boolean;
+  axisWidth?: number;
 }
 
 /**
@@ -83,12 +74,11 @@ const defaultConfig: PanelFieldConfig = {
   fillOpacity: 80,
 };
 
-export function mapMouseEventToMode(event: React.MouseEvent): SeriesVisibilityChangeMode {
-  if (event.ctrlKey || event.metaKey || event.shiftKey) {
-    return SeriesVisibilityChangeMode.AppendToSelection;
-  }
-  return SeriesVisibilityChangeMode.ToggleSelection;
-}
+/** Checks if a mapped value of the specified type exists for the given field */
+export const hasSpecialMappedValue = (field: Field, match: SpecialValueMatch): boolean =>
+  field.config.mappings?.some(
+    (mapping: ValueMapping): boolean => mapping.type === MappingType.SpecialValue && mapping.options.match === match
+  ) || false;
 
 export const preparePlotConfigBuilder: UPlotConfigPrepFn<UPlotConfigOptions> = ({
   frame,
@@ -96,14 +86,12 @@ export const preparePlotConfigBuilder: UPlotConfigPrepFn<UPlotConfigOptions> = (
   timeZones,
   getTimeRange,
   mode,
-  sync,
   rowHeight,
   colWidth,
   showValue,
   alignValue,
   mergeValues,
   getValueColor,
-  eventsScope = '__global_',
   hoverMulti,
 }) => {
   const builder = new UPlotConfigBuilder(timeZones[0]);
@@ -114,15 +102,6 @@ export const preparePlotConfigBuilder: UPlotConfigPrepFn<UPlotConfigOptions> = (
     const mode = field.config?.color?.mode;
     return !(mode && field.display && mode.startsWith('continuous-'));
   };
-
-  const hasMappedNull = (field: Field) => {
-    return (
-      field.config.mappings?.some(
-        (mapping) => mapping.type === MappingType.SpecialValue && mapping.options.match === 'null'
-      ) || false
-    );
-  };
-
   const getValueColorFn = (seriesIdx: number, value: unknown) => {
     const field = frame.fields[seriesIdx];
 
@@ -141,7 +120,12 @@ export const preparePlotConfigBuilder: UPlotConfigPrepFn<UPlotConfigOptions> = (
     mode: mode!,
     numSeries: frame.fields.length - 1,
     isDiscrete: (seriesIdx) => isDiscrete(frame.fields[seriesIdx]),
-    hasMappedNull: (seriesIdx) => hasMappedNull(frame.fields[seriesIdx]),
+    hasMappedNull: (seriesIdx) =>
+      hasSpecialMappedValue(frame.fields[seriesIdx], SpecialValueMatch.Null) ||
+      hasSpecialMappedValue(frame.fields[seriesIdx], SpecialValueMatch.NullAndNaN),
+    hasMappedNaN: (seriesIdx) =>
+      hasSpecialMappedValue(frame.fields[seriesIdx], SpecialValueMatch.NaN) ||
+      hasSpecialMappedValue(frame.fields[seriesIdx], SpecialValueMatch.NullAndNaN),
     mergeValues,
     rowHeight: rowHeight,
     colWidth: colWidth,
@@ -154,49 +138,13 @@ export const preparePlotConfigBuilder: UPlotConfigPrepFn<UPlotConfigOptions> = (
     getTimeRange,
     // hardcoded formatter for state values
     formatValue: (seriesIdx, value) => formattedValueToString(frame.fields[seriesIdx].display!(value)),
-    onHover: (seriesIndex, valueIndex) => {
-      hoveredSeriesIdx = seriesIndex;
-      hoveredDataIdx = valueIndex;
-      shouldChangeHover = true;
-    },
-    onLeave: () => {
-      hoveredSeriesIdx = null;
-      hoveredDataIdx = null;
-      shouldChangeHover = true;
-    },
     hoverMulti,
   };
-
-  let shouldChangeHover = false;
-  let hoveredSeriesIdx: number | null = null;
-  let hoveredDataIdx: number | null = null;
 
   const coreConfig = getConfig(opts);
 
   builder.addHook('init', coreConfig.init);
   builder.addHook('drawClear', coreConfig.drawClear);
-
-  // in TooltipPlugin, this gets invoked and the result is bound to a setCursor hook
-  // which fires after the above setCursor hook, so can take advantage of hoveringOver
-  // already set by the above onHover/onLeave callbacks that fire from coreConfig.setCursor
-  const interpolateTooltip: PlotTooltipInterpolator = (
-    updateActiveSeriesIdx,
-    updateActiveDatapointIdx,
-    updateTooltipPosition
-  ) => {
-    if (shouldChangeHover) {
-      if (hoveredSeriesIdx != null) {
-        updateActiveSeriesIdx(hoveredSeriesIdx);
-        updateActiveDatapointIdx(hoveredDataIdx);
-      }
-
-      shouldChangeHover = false;
-    }
-
-    updateTooltipPosition(hoveredSeriesIdx == null);
-  };
-
-  builder.setTooltipInterpolator(interpolateTooltip);
 
   builder.setPrepData((frames) => preparePlotData2(frames[0], getStackingGroups(frames[0])));
 
@@ -218,25 +166,32 @@ export const preparePlotConfigBuilder: UPlotConfigPrepFn<UPlotConfigOptions> = (
     range: coreConfig.yRange,
   });
 
+  const xAxisHidden = frame.fields[0].config.custom.axisPlacement === AxisPlacement.Hidden;
+
   builder.addAxis({
+    show: !xAxisHidden,
     scaleKey: xScaleKey,
     isTime: true,
     splits: coreConfig.xSplits!,
     placement: AxisPlacement.Bottom,
     timeZone: timeZones[0],
     theme,
-    grid: { show: true },
   });
+
+  const yCustomConfig = frame.fields[1].config.custom;
+  const yAxisWidth = yCustomConfig.axisWidth;
+  const yAxisHidden = yCustomConfig.axisPlacement === AxisPlacement.Hidden;
 
   builder.addAxis({
     scaleKey: FIXED_UNIT, // y
     isTime: false,
     placement: AxisPlacement.Left,
     splits: coreConfig.ySplits,
-    values: coreConfig.yValues,
+    values: yAxisHidden ? (u, splits) => splits.map((v) => null) : coreConfig.yValues,
     grid: { show: false },
     ticks: { show: false },
-    gap: 16,
+    gap: yAxisHidden ? 0 : 16,
+    size: yAxisHidden ? 0 : yAxisWidth,
     theme,
   });
 
@@ -274,57 +229,8 @@ export const preparePlotConfigBuilder: UPlotConfigPrepFn<UPlotConfigOptions> = (
     });
   }
 
-  if (sync && sync() !== DashboardCursorSync.Off) {
-    let cursor: Partial<uPlot.Cursor> = {};
-
-    cursor.sync = {
-      key: eventsScope,
-      scales: [xScaleKey, null],
-    };
-    builder.setSync();
-    builder.setCursor(cursor);
-  }
-
   return builder;
 };
-
-export function getNamesToFieldIndex(frame: DataFrame): Map<string, number> {
-  const names = new Map<string, number>();
-  for (let i = 0; i < frame.fields.length; i++) {
-    names.set(getFieldDisplayName(frame.fields[i], frame), i);
-  }
-  return names;
-}
-
-/**
- * If any sequential duplicate values exist, this will return a new array
- * with the future values set to undefined.
- *
- * in:  1,        1,undefined,        1,2,        2,null,2,3
- * out: 1,undefined,undefined,undefined,2,undefined,null,2,3
- */
-export function unsetSameFutureValues(values: unknown[]): unknown[] | undefined {
-  let prevVal = values[0];
-  let clone: unknown[] | undefined = undefined;
-
-  for (let i = 1; i < values.length; i++) {
-    let value = values[i];
-
-    if (value === null) {
-      prevVal = null;
-    } else {
-      if (value === prevVal) {
-        if (!clone) {
-          clone = [...values];
-        }
-        clone[i] = undefined;
-      } else if (value != null) {
-        prevVal = value;
-      }
-    }
-  }
-  return clone;
-}
 
 function getSpanNulls(field: Field) {
   let spanNulls = field.config.custom?.spanNulls;
@@ -404,8 +310,9 @@ export function prepareTimelineFields(
   timeRange: TimeRange,
   theme: GrafanaTheme2
 ): { frames?: DataFrame[]; warn?: string } {
+  // this allows PanelDataErrorView to show the default noValue message
   if (!series?.length) {
-    return { warn: 'No data in response' };
+    return { warn: '' };
   }
 
   cacheFieldDisplayNames(series);
@@ -420,7 +327,7 @@ export function prepareTimelineFields(
     for (let i = 0; i < frame.fields.length; i++) {
       let f = frame.fields[i];
 
-      if (f.type === FieldType.time) {
+      if (f.type === FieldType.time && typeof f.values[0] === 'number') {
         if (startFieldIdx === -1) {
           startFieldIdx = i;
         } else if (endFieldIdx === -1) {
@@ -481,14 +388,13 @@ export function prepareTimelineFields(
 
     const fields: Field[] = [];
     for (let field of frame.fields) {
-      if (field.config.custom?.hideFrom?.viz) {
-        continue;
-      }
       switch (field.type) {
         case FieldType.time:
-          isTimeseries = true;
-          hasTimeseries = true;
-          fields.push(field);
+          if (typeof field.values[0] === 'number') {
+            isTimeseries = true;
+            hasTimeseries = true;
+            fields.push(field);
+          }
           break;
         case FieldType.enum:
         case FieldType.number:
@@ -534,24 +440,48 @@ export function prepareTimelineFields(
   }
 
   if (!hasTimeseries) {
-    return { warn: 'Data does not have a time field' };
+    return { warn: t('timeline.missing-field.time', 'Data does not have a time field') };
   }
   if (!frames.length) {
-    return { warn: 'No graphable fields' };
+    return { warn: t('timeline.missing-field.all', 'No graphable fields') };
   }
 
   return { frames };
 }
 
-export function getThresholdItems(fieldConfig: FieldConfig, theme: GrafanaTheme2): VizLegendItem[] {
+export function makeFramePerSeries(frames: DataFrame[]) {
+  const outFrames: DataFrame[] = [];
+
+  for (let frame of frames) {
+    const timeFields = frame.fields.filter((field) => field.type === FieldType.time);
+
+    if (timeFields.length > 0) {
+      for (let field of frame.fields) {
+        if (field.type !== FieldType.time) {
+          outFrames.push({ fields: [...timeFields, field], length: frame.length });
+        }
+      }
+    }
+  }
+
+  return outFrames;
+}
+
+export function getThresholdItems(
+  fieldConfig: FieldConfig,
+  theme: GrafanaTheme2,
+  thresholdItems?: ThresholdsConfig
+): VizLegendItem[] {
   const items: VizLegendItem[] = [];
-  const thresholds = fieldConfig.thresholds;
+  const thresholds = thresholdItems ? thresholdItems : fieldConfig.thresholds;
   if (!thresholds || !thresholds.steps.length) {
     return items;
   }
 
   const steps = thresholds.steps;
-  const getDisplay = getValueFormat(thresholds.mode === ThresholdsMode.Percentage ? 'percent' : fieldConfig.unit ?? '');
+  const getDisplay = getValueFormat(
+    thresholds.mode === ThresholdsMode.Percentage ? 'percent' : (fieldConfig.unit ?? '')
+  );
 
   // `undefined` value for decimals will use `auto`
   const format = (value: number) => formattedValueToString(getDisplay(value, fieldConfig.decimals ?? undefined));
@@ -574,6 +504,66 @@ export function getThresholdItems(fieldConfig: FieldConfig, theme: GrafanaTheme2
       color: theme.visualization.getColorByName(step.color),
       yAxis: 1,
     });
+  }
+
+  return items;
+}
+
+export function getValueMappingItems(mappings: ValueMapping[], theme: GrafanaTheme2): VizLegendItem[] {
+  const items: VizLegendItem[] = [];
+  if (!mappings) {
+    return items;
+  }
+
+  for (let mapping of mappings) {
+    const { options, type } = mapping;
+
+    if (type === MappingType.ValueToText) {
+      for (let [label, value] of Object.entries(options)) {
+        const color = value.color;
+        items.push({
+          label: label,
+          color: theme.visualization.getColorByName(color ?? FALLBACK_COLOR),
+          yAxis: 1,
+        });
+      }
+    }
+
+    if (type === MappingType.RangeToText) {
+      const { from, result, to } = options;
+      const { text, color } = result;
+      const label = text ? `[${from} - ${to}] ${text}` : `[${from} - ${to}]`;
+
+      items.push({
+        label: label,
+        color: theme.visualization.getColorByName(color ?? FALLBACK_COLOR),
+        yAxis: 1,
+      });
+    }
+
+    if (type === MappingType.RegexToText) {
+      const { pattern, result } = options;
+      const { text, color } = result;
+      const label = `${text || pattern}`;
+
+      items.push({
+        label: label,
+        color: theme.visualization.getColorByName(color ?? FALLBACK_COLOR),
+        yAxis: 1,
+      });
+    }
+
+    if (type === MappingType.SpecialValue) {
+      const { match, result } = options;
+      const { text, color } = result;
+      const label = `${text || match}`;
+
+      items.push({
+        label: label,
+        color: theme.visualization.getColorByName(color ?? FALLBACK_COLOR),
+        yAxis: 1,
+      });
+    }
   }
 
   return items;
@@ -681,7 +671,7 @@ export function findNextStateIndex(field: Field, datapointIdx: number) {
  * This function calculates with 30 days month and 365 days year.
  * adapted from https://gist.github.com/remino/1563878
  * @param milliSeconds The duration in milliseconds
- * @returns A formated string of the duration
+ * @returns A formatted string of the duration
  */
 export function fmtDuration(milliSeconds: number): string {
   if (milliSeconds < 0 || Number.isNaN(milliSeconds)) {

@@ -4,10 +4,7 @@ import (
 	"encoding/json"
 
 	alertingNotify "github.com/grafana/alerting/notify"
-	alertingTemplates "github.com/grafana/alerting/templates"
-	"github.com/prometheus/alertmanager/config"
 
-	"github.com/grafana/grafana/pkg/components/simplejson"
 	apimodels "github.com/grafana/grafana/pkg/services/ngalert/api/tooling/definitions"
 	"github.com/grafana/grafana/pkg/services/ngalert/models"
 )
@@ -45,80 +42,28 @@ func PostableApiAlertingConfigToApiReceivers(c apimodels.PostableApiAlertingConf
 	return apiReceivers
 }
 
-type DecryptFn = func(value string) string
+// Silence-specific compat functions to convert between grafana/alerting and model types.
 
-func PostableToGettableGrafanaReceiver(r *apimodels.PostableGrafanaReceiver, provenance *models.Provenance, decryptFn DecryptFn, listOnly bool) (apimodels.GettableGrafanaReceiver, error) {
-	out := apimodels.GettableGrafanaReceiver{
-		UID:  r.UID,
-		Name: r.Name,
-		Type: r.Type,
-	}
-	if provenance != nil {
-		out.Provenance = apimodels.Provenance(*provenance)
-	}
-
-	// if we aren't only listing, include the settings in the output
-	if !listOnly {
-		secureFields := make(map[string]bool, len(r.SecureSettings))
-		settings, err := simplejson.NewJson([]byte(r.Settings))
-		if err != nil {
-			return apimodels.GettableGrafanaReceiver{}, err
-		}
-
-		for k, v := range r.SecureSettings {
-			decryptedValue := decryptFn(v)
-			if decryptedValue == "" {
-				continue
-			} else {
-				settings.Set(k, decryptedValue)
-			}
-			secureFields[k] = true
-		}
-
-		jsonBytes, err := settings.MarshalJSON()
-		if err != nil {
-			return apimodels.GettableGrafanaReceiver{}, err
-		}
-
-		out.Settings = jsonBytes
-		out.SecureFields = secureFields
-		out.DisableResolveMessage = r.DisableResolveMessage
-	}
-
-	return out, nil
+func GettableSilenceToSilence(s alertingNotify.GettableSilence) *models.Silence {
+	sil := models.Silence(s)
+	return &sil
 }
 
-func PostableToGettableApiReceiver(r *apimodels.PostableApiReceiver, provenances map[string]models.Provenance, decryptFn DecryptFn, listOnly bool) (apimodels.GettableApiReceiver, error) {
-	out := apimodels.GettableApiReceiver{
-		Receiver: config.Receiver{
-			Name: r.Receiver.Name,
-		},
+func GettableSilencesToSilences(silences alertingNotify.GettableSilences) []*models.Silence {
+	res := make([]*models.Silence, 0, len(silences))
+	for _, sil := range silences {
+		res = append(res, GettableSilenceToSilence(*sil))
 	}
-
-	for _, gr := range r.GrafanaManagedReceivers {
-		var prov *models.Provenance
-		if p, ok := provenances[gr.UID]; ok {
-			prov = &p
-		}
-
-		gettable, err := PostableToGettableGrafanaReceiver(gr, prov, decryptFn, listOnly)
-		if err != nil {
-			return apimodels.GettableApiReceiver{}, err
-		}
-		out.GrafanaManagedReceivers = append(out.GrafanaManagedReceivers, &gettable)
-	}
-
-	return out, nil
+	return res
 }
 
-// ToTemplateDefinitions converts the given PostableUserConfig's TemplateFiles to a slice of TemplateDefinitions.
-func ToTemplateDefinitions(cfg *apimodels.PostableUserConfig) []alertingTemplates.TemplateDefinition {
-	out := make([]alertingTemplates.TemplateDefinition, 0, len(cfg.TemplateFiles))
-	for name, tmpl := range cfg.TemplateFiles {
-		out = append(out, alertingTemplates.TemplateDefinition{
-			Name:     name,
-			Template: tmpl,
-		})
+func SilenceToPostableSilence(s models.Silence) *alertingNotify.PostableSilence {
+	var id string
+	if s.ID != nil {
+		id = *s.ID
 	}
-	return out
+	return &alertingNotify.PostableSilence{
+		ID:      id,
+		Silence: s.Silence,
+	}
 }

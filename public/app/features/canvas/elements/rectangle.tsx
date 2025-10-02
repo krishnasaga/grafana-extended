@@ -1,15 +1,21 @@
 import { css } from '@emotion/css';
-import React, { PureComponent } from 'react';
+import { PureComponent } from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
+import { t } from '@grafana/i18n';
 import { stylesFactory } from '@grafana/ui';
 import { config } from 'app/core/config';
 import { DimensionContext } from 'app/features/dimensions/context';
 import { ColorDimensionEditor } from 'app/features/dimensions/editors/ColorDimensionEditor';
 import { TextDimensionEditor } from 'app/features/dimensions/editors/TextDimensionEditor';
-import { getDataLinks } from 'app/plugins/panel/canvas/utils';
 
-import { CanvasElementItem, CanvasElementProps, defaultBgColor, defaultTextColor } from '../element';
+import {
+  CanvasElementItem,
+  CanvasElementOptions,
+  CanvasElementProps,
+  defaultBgColor,
+  defaultTextColor,
+} from '../element';
 import { Align, TextConfig, TextData, VAlign } from '../types';
 
 class RectangleDisplay extends PureComponent<CanvasElementProps<TextConfig, TextData>> {
@@ -67,42 +73,44 @@ export const rectangleItem: CanvasElementItem<TextConfig, TextData> = {
         fixed: defaultBgColor,
       },
     },
+    links: options?.links ?? [],
   }),
 
   // Called when data changes
-  prepareData: (ctx: DimensionContext, cfg: TextConfig) => {
+  prepareData: (dimensionContext: DimensionContext, elementOptions: CanvasElementOptions<TextConfig>) => {
+    const textConfig = elementOptions.config;
+
     const data: TextData = {
-      text: cfg.text ? ctx.getText(cfg.text).value() : '',
-      align: cfg.align ?? Align.Center,
-      valign: cfg.valign ?? VAlign.Middle,
-      size: cfg.size,
+      text: textConfig?.text ? dimensionContext.getText(textConfig.text).value() : '',
+      field: textConfig?.text?.field,
+      align: textConfig?.align ?? Align.Center,
+      valign: textConfig?.valign ?? VAlign.Middle,
+      size: textConfig?.size,
     };
 
-    if (cfg.color) {
-      data.color = ctx.getColor(cfg.color).value();
+    if (textConfig?.color) {
+      data.color = dimensionContext.getColor(textConfig.color).value();
     }
-
-    data.links = getDataLinks(ctx, cfg, data.text);
 
     return data;
   },
 
   // Heatmap overlay options
   registerOptionsUI: (builder) => {
-    const category = ['Rectangle'];
+    const category = [t('canvas.rectangle-item.category-rectangle', 'Rectangle')];
     builder
       .addCustomEditor({
         category,
         id: 'textSelector',
         path: 'config.text',
-        name: 'Text',
+        name: t('canvas.rectangle-item.name-text', 'Text'),
         editor: TextDimensionEditor,
       })
       .addCustomEditor({
         category,
         id: 'config.color',
         path: 'config.color',
-        name: 'Text color',
+        name: t('canvas.rectangle-item.name-text-color', 'Text color'),
         editor: ColorDimensionEditor,
         settings: {},
         defaultValue: {},
@@ -110,12 +118,12 @@ export const rectangleItem: CanvasElementItem<TextConfig, TextData> = {
       .addRadio({
         category,
         path: 'config.align',
-        name: 'Align text',
+        name: t('canvas.rectangle-item.name-align-text', 'Align text'),
         settings: {
           options: [
-            { value: Align.Left, label: 'Left' },
-            { value: Align.Center, label: 'Center' },
-            { value: Align.Right, label: 'Right' },
+            { value: Align.Left, label: t('canvas.rectangle-item.label.left', 'Left') },
+            { value: Align.Center, label: t('canvas.rectangle-item.label.center', 'Center') },
+            { value: Align.Right, label: t('canvas.rectangle-item.label.right', 'Right') },
           ],
         },
         defaultValue: Align.Left,
@@ -123,12 +131,12 @@ export const rectangleItem: CanvasElementItem<TextConfig, TextData> = {
       .addRadio({
         category,
         path: 'config.valign',
-        name: 'Vertical align',
+        name: t('canvas.rectangle-item.name-vertical-align', 'Vertical align'),
         settings: {
           options: [
-            { value: VAlign.Top, label: 'Top' },
-            { value: VAlign.Middle, label: 'Middle' },
-            { value: VAlign.Bottom, label: 'Bottom' },
+            { value: VAlign.Top, label: t('canvas.rectangle-item.label.top', 'Top') },
+            { value: VAlign.Middle, label: t('canvas.rectangle-item.label.middle', 'Middle') },
+            { value: VAlign.Bottom, label: t('canvas.rectangle-item.label.bottom', 'Bottom') },
           ],
         },
         defaultValue: VAlign.Middle,
@@ -136,9 +144,9 @@ export const rectangleItem: CanvasElementItem<TextConfig, TextData> = {
       .addNumberInput({
         category,
         path: 'config.size',
-        name: 'Text size',
+        name: t('canvas.rectangle-item.name-text-size', 'Text size'),
         settings: {
-          placeholder: 'Auto',
+          placeholder: t('canvas.rectangle-item.placeholder.auto', 'Auto'),
         },
       });
   },

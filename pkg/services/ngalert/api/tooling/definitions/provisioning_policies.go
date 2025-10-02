@@ -37,6 +37,13 @@ import (
 //
 // Export the notification policy tree in provisioning file format.
 //
+//     Produces:
+//     - application/json
+//     - application/yaml
+//     - application/terraform+hcl
+//     - text/yaml
+//     - text/hcl
+//
 //     Responses:
 //       200: AlertingFileExport
 //       404: NotFound
@@ -74,6 +81,7 @@ type RouteExport struct {
 	ObjectMatchers      ObjectMatchers      `yaml:"object_matchers,omitempty" json:"object_matchers,omitempty"`
 	ObjectMatchersSlice []*MatcherExport    `yaml:"-" json:"-" hcl:"matcher,block"`
 	MuteTimeIntervals   *[]string           `yaml:"mute_time_intervals,omitempty" json:"mute_time_intervals,omitempty" hcl:"mute_timings"`
+	ActiveTimeIntervals *[]string           `yaml:"active_time_intervals,omitempty" json:"active_time_intervals,omitempty" hcl:"active_timings"`
 	Continue            *bool               `yaml:"continue,omitempty" json:"continue,omitempty" hcl:"continue,optional"` // Added omitempty to yaml for a cleaner export.
 	Routes              []*RouteExport      `yaml:"routes,omitempty" json:"routes,omitempty" hcl:"policy,block"`
 

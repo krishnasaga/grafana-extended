@@ -9,27 +9,36 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	goapi "github.com/grafana/grafana-openapi-client-go/client"
+	"github.com/stretchr/testify/require"
+
+	"github.com/grafana/grafana/pkg/configprovider"
+	"github.com/grafana/grafana/pkg/infra/db"
+	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/resourcepermissions"
 	"github.com/grafana/grafana/pkg/services/org"
 	"github.com/grafana/grafana/pkg/services/org/orgimpl"
 	"github.com/grafana/grafana/pkg/services/quota/quotaimpl"
-	"github.com/grafana/grafana/pkg/services/sqlstore"
 	"github.com/grafana/grafana/pkg/services/supportbundles/supportbundlestest"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/services/user/userimpl"
-	"github.com/stretchr/testify/require"
+	"github.com/grafana/grafana/pkg/setting"
 )
 
-func CreateUser(t *testing.T, store *sqlstore.SQLStore, cmd user.CreateUserCommand) int64 {
+func CreateUser(t *testing.T, db db.DB, cfg *setting.Cfg, cmd user.CreateUserCommand) int64 {
 	t.Helper()
 
-	store.Cfg.AutoAssignOrg = true
-	store.Cfg.AutoAssignOrgId = 1
+	cfg.AutoAssignOrg = true
+	cfg.AutoAssignOrgId = 1
 
-	quotaService := quotaimpl.ProvideService(store, store.Cfg)
-	orgService, err := orgimpl.ProvideService(store, store.Cfg, quotaService)
+	cfgProvider, err := configprovider.ProvideService(cfg)
 	require.NoError(t, err)
-	usrSvc, err := userimpl.ProvideService(store, orgService, store.Cfg, nil, nil, quotaService, supportbundlestest.NewFakeBundleService())
+	quotaService := quotaimpl.ProvideService(context.Background(), db, cfgProvider)
+	orgService, err := orgimpl.ProvideService(db, cfg, quotaService)
+	require.NoError(t, err)
+	usrSvc, err := userimpl.ProvideService(
+		db, orgService, cfg, nil, nil, tracing.InitializeTracerForTest(),
+		quotaService, supportbundlestest.NewFakeBundleService(),
+	)
 	require.NoError(t, err)
 
 	u, err := usrSvc.Create(context.Background(), &cmd)

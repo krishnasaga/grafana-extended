@@ -1,15 +1,16 @@
 import { css, cx } from '@emotion/css';
-import React, { memo, useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 
 import { GrafanaTheme2, isDateTime, rangeUtil, RawTimeRange, TimeOption, TimeRange, TimeZone } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
+import { t, Trans } from '@grafana/i18n';
 
-import { useStyles2, useTheme2 } from '../../../themes';
+import { useStyles2, useTheme2 } from '../../../themes/ThemeContext';
 import { getFocusStyles } from '../../../themes/mixins';
-import { t, Trans } from '../../../utils/i18n';
-import { CustomScrollbar } from '../../CustomScrollbar/CustomScrollbar';
 import { FilterInput } from '../../FilterInput/FilterInput';
 import { Icon } from '../../Icon/Icon';
+import { TextLink } from '../../Link/TextLink';
+import { WeekStart } from '../WeekStartPicker';
 
 import { TimePickerFooter } from './TimePickerFooter';
 import { TimePickerTitle } from './TimePickerTitle';
@@ -34,6 +35,7 @@ interface Props {
   isReversed?: boolean;
   hideQuickRanges?: boolean;
   widthOverride?: number;
+  weekStart?: WeekStart;
 }
 
 export interface PropsWithScreenSize extends Props {
@@ -88,12 +90,12 @@ export const TimePickerContentWithScreenSize = (props: PropsWithScreenSize) => {
                 placeholder={t('time-picker.content.filter-placeholder', 'Search quick ranges')}
               />
             </div>
-            <CustomScrollbar>
+            <div className={styles.scrollContent}>
               {!isFullscreen && <NarrowScreenForm {...props} historyOptions={historyOptions} />}
               {!hideQuickRanges && (
                 <TimeRangeList options={filteredQuickOptions} onChange={onChangeTimeOption} value={timeOption} />
               )}
-            </CustomScrollbar>
+            </div>
           </div>
         )}
         {isFullscreen && (
@@ -122,7 +124,7 @@ export const TimePickerContent = (props: Props) => {
 };
 
 const NarrowScreenForm = (props: FormProps) => {
-  const { value, hideQuickRanges, onChange, timeZone, historyOptions = [], showHistory, onError } = props;
+  const { value, hideQuickRanges, onChange, timeZone, historyOptions = [], showHistory, onError, weekStart } = props;
   const styles = useStyles2(getNarrowScreenStyles);
   const isAbsolute = isDateTime(value.raw.from) || isDateTime(value.raw.to);
   const [collapsedFlag, setCollapsedFlag] = useState(!isAbsolute);
@@ -162,6 +164,7 @@ const NarrowScreenForm = (props: FormProps) => {
               timeZone={timeZone}
               isFullscreen={false}
               onError={onError}
+              weekStart={weekStart}
             />
           </div>
           {showHistory && (
@@ -179,7 +182,7 @@ const NarrowScreenForm = (props: FormProps) => {
 };
 
 const FullScreenForm = (props: FormProps) => {
-  const { onChange, value, timeZone, fiscalYearStartMonth, isReversed, historyOptions, onError } = props;
+  const { onChange, value, timeZone, fiscalYearStartMonth, isReversed, historyOptions, onError, weekStart } = props;
   const styles = useStyles2(getFullScreenStyles, props.hideQuickRanges);
   const onChangeTimeOption = (timeOption: TimeOption) => {
     return onChange(mapOptionToTimeRange(timeOption, timeZone));
@@ -201,6 +204,7 @@ const FullScreenForm = (props: FormProps) => {
           isFullscreen={true}
           isReversed={isReversed}
           onError={onError}
+          weekStart={weekStart}
         />
       </div>
       {props.showHistory && (
@@ -231,13 +235,9 @@ const EmptyRecentList = memo(() => {
       </div>
       <Trans i18nKey="time-picker.content.empty-recent-list-docs">
         <div>
-          <a
-            className={styles.link}
-            href="https://grafana.com/docs/grafana/latest/dashboards/time-range-controls"
-            target="_new"
-          >
+          <TextLink href="https://grafana.com/docs/grafana/latest/dashboards/time-range-controls" external>
             Read the documentation
-          </a>
+          </TextLink>
           <span> to find out more about how to enter custom time ranges.</span>
         </div>
       </Trans>
@@ -274,7 +274,7 @@ const getStyles = (
   isFullscreen?: boolean
 ) => ({
   container: css({
-    background: theme.colors.background.primary,
+    background: theme.colors.background.elevated,
     boxShadow: theme.shadows.z3,
     width: `${isFullscreen ? '546px' : '262px'}`,
     borderRadius: theme.shape.radius.default,
@@ -295,6 +295,7 @@ const getStyles = (
     borderRight: `${isReversed ? 'none' : `1px solid ${theme.colors.border.weak}`}`,
     width: `${!hideQuickRanges ? '60%' : '100%'}`,
     overflow: 'auto',
+    scrollbarWidth: 'thin',
     order: isReversed ? 1 : 0,
   }),
   rightSide: css({
@@ -308,6 +309,10 @@ const getStyles = (
   }),
   spacing: css({
     marginTop: '16px',
+  }),
+  scrollContent: css({
+    overflowY: 'auto',
+    scrollbarWidth: 'thin',
   }),
 });
 
@@ -362,8 +367,5 @@ const getEmptyListStyles = (theme: GrafanaTheme2) => ({
     'a, span': {
       fontSize: '13px',
     },
-  }),
-  link: css({
-    color: theme.colors.text.link,
   }),
 });

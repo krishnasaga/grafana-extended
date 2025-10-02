@@ -1,15 +1,17 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { SelectableValue } from '@grafana/data';
+import { Trans, t } from '@grafana/i18n';
 import { InlineField, RadioButtonGroup, Select } from '@grafana/ui';
 
-import { AzureQueryEditorFieldProps } from '../../types';
+import { AzureQueryEditorFieldProps } from '../../types/types';
 
 import { setDashboardTime, setTimeColumn } from './setQueryValue';
 
 export function TimeManagement({ query, onQueryChange: onChange, schema }: AzureQueryEditorFieldProps) {
   const [defaultTimeColumns, setDefaultTimeColumns] = useState<SelectableValue[] | undefined>();
   const [timeColumns, setTimeColumns] = useState<SelectableValue[] | undefined>();
+  const [disabledTimePicker, setDisabledTimePicker] = useState<boolean>(false);
 
   const setDefaultColumn = useCallback((column: string) => onChange(setTimeColumn(query, column)), [query, onChange]);
 
@@ -19,7 +21,7 @@ export function TimeManagement({ query, onQueryChange: onChange, schema }: Azure
       const timeColumnsSet: Set<string> = new Set();
       const defaultColumnsMap: Map<string, SelectableValue> = new Map();
       const db = schema.database;
-      if (db) {
+      if (db && db?.tables?.length > 0) {
         for (const table of db.tables) {
           const cols = table.columns.reduce<SelectableValue[]>((prev, curr, i) => {
             if (curr.type === 'datetime') {
@@ -38,28 +40,27 @@ export function TimeManagement({ query, onQueryChange: onChange, schema }: Azure
             });
           }
         }
-      }
-      setTimeColumns(timeColumnOptions);
-      const defaultColumns = Array.from(defaultColumnsMap.values());
-      setDefaultTimeColumns(defaultColumns);
-
-      // Set default value
-      if (
-        !query.azureLogAnalytics.timeColumn ||
-        (query.azureLogAnalytics.timeColumn &&
-          !timeColumnsSet.has(query.azureLogAnalytics.timeColumn) &&
-          !defaultColumnsMap.has(query.azureLogAnalytics.timeColumn))
-      ) {
-        if (defaultColumns && defaultColumns.length) {
-          setDefaultColumn(defaultColumns[0].value);
-          setDefaultColumn(defaultColumns[0].value);
-          return;
-        } else if (timeColumnOptions && timeColumnOptions.length) {
-          setDefaultColumn(timeColumnOptions[0].value);
-          return;
-        } else {
-          setDefaultColumn('TimeGenerated');
-          return;
+        setTimeColumns(timeColumnOptions);
+        const defaultColumns = Array.from(defaultColumnsMap.values());
+        setDefaultTimeColumns(defaultColumns);
+        // Set default value
+        if (
+          !query.azureLogAnalytics.timeColumn ||
+          (query.azureLogAnalytics.timeColumn &&
+            !timeColumnsSet.has(query.azureLogAnalytics.timeColumn) &&
+            !defaultColumnsMap.has(query.azureLogAnalytics.timeColumn))
+        ) {
+          if (defaultColumns && defaultColumns.length) {
+            setDefaultColumn(defaultColumns[0].value);
+            setDefaultColumn(defaultColumns[0].value);
+            return;
+          } else if (timeColumnOptions && timeColumnOptions.length) {
+            setDefaultColumn(timeColumnOptions[0].value);
+            return;
+          } else {
+            setDefaultColumn('TimeGenerated');
+            return;
+          }
         }
       }
     }
@@ -76,35 +77,55 @@ export function TimeManagement({ query, onQueryChange: onChange, schema }: Azure
     },
     [onChange, query]
   );
+
+  useEffect(() => {
+    if (query.azureLogAnalytics?.basicLogsQuery) {
+      setDisabledTimePicker(true);
+    } else {
+      setDisabledTimePicker(false);
+    }
+  }, [query.azureLogAnalytics?.basicLogsQuery]);
+
   return (
     <>
       <InlineField
-        label="Time-range"
+        label={t('components.time-management.label-time-range', 'Time-range')}
         tooltip={
-          <span>
-            Specifies the time-range used to query. The <code>Query</code> option will only use time-ranges specified in
-            the query. <code>Dashboard</code> will only use the Grafana time-range.
-          </span>
+          <Trans i18nKey="components.time-management.tooltip-time-range">
+            <span>
+              Specifies the time-range used to query. The <code>Query</code> option will only use time-ranges specified
+              in the query. <code>Dashboard</code> will only use the Grafana time-range. In Logs Builder mode, only
+              Dashboard time will be used.
+            </span>
+          </Trans>
         }
       >
         <RadioButtonGroup
           options={[
-            { label: 'Query', value: false },
-            { label: 'Dashboard', value: true },
+            { label: 'Query', value: 'query', disabled: query.azureLogAnalytics?.mode === 'builder' },
+            { label: 'Dashboard', value: 'dashboard' },
           ]}
-          value={query.azureLogAnalytics?.dashboardTime ?? false}
+          value={
+            query.azureLogAnalytics?.dashboardTime || query.azureLogAnalytics?.mode === 'builder'
+              ? 'dashboard'
+              : 'query'
+          }
           size={'md'}
           onChange={(val) => onChange(setDashboardTime(query, val))}
+          disabled={disabledTimePicker}
+          disabledOptions={disabledTimePicker ? ['query'] : []}
         />
       </InlineField>
-      {query.azureLogAnalytics?.dashboardTime && (
+      {(query.azureLogAnalytics?.dashboardTime || query.azureLogAnalytics?.mode === 'builder') && (
         <InlineField
-          label="Time Column"
+          label={t('components.time-management.label-time-column', 'Time Column')}
           tooltip={
-            <span>
-              Specifies the time column used for filtering. Defaults to the first tables <code>timeSpan</code> column,
-              the first <code>datetime</code> column found or <code>TimeGenerated</code>.
-            </span>
+            <Trans i18nKey="components.time-management.tooltip-time-column">
+              <span>
+                Specifies the time column used for filtering. Defaults to the first tables <code>timeSpan</code> column,
+                the first <code>datetime</code> column found or <code>TimeGenerated</code>.
+              </span>
+            </Trans>
           }
         >
           <Select

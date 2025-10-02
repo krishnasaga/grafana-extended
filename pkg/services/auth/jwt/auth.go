@@ -6,7 +6,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/go-jose/go-jose/v3/jwt"
+	jose "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/remotecache"
@@ -65,11 +66,12 @@ func sanitizeJWT(jwtToken string) string {
 	return strings.ReplaceAll(jwtToken, string(base64.StdPadding), "")
 }
 
-func (s *AuthService) Verify(ctx context.Context, strToken string) (JWTClaims, error) {
+func (s *AuthService) Verify(ctx context.Context, strToken string) (map[string]any, error) {
 	s.log.Debug("Parsing JSON Web Token")
 
 	strToken = sanitizeJWT(strToken)
-	token, err := jwt.ParseSigned(strToken)
+	token, err := jwt.ParseSigned(strToken, []jose.SignatureAlgorithm{jose.EdDSA, jose.HS256, jose.HS384,
+		jose.HS512, jose.RS512, jose.RS256, jose.ES256, jose.ES384, jose.ES512, jose.PS256, jose.PS384, jose.PS512})
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +86,7 @@ func (s *AuthService) Verify(ctx context.Context, strToken string) (JWTClaims, e
 
 	s.log.Debug("Trying to verify JSON Web Token using a key")
 
-	var claims JWTClaims
+	var claims map[string]any
 	for _, key := range keys {
 		if err = token.Claims(key, &claims); err == nil {
 			break
@@ -106,7 +108,8 @@ func (s *AuthService) Verify(ctx context.Context, strToken string) (JWTClaims, e
 // HasSubClaim checks if the provided JWT token contains a non-empty "sub" claim.
 // Returns true if it contains, otherwise returns false.
 func HasSubClaim(jwtToken string) bool {
-	parsed, err := jwt.ParseSigned(sanitizeJWT(jwtToken))
+	parsed, err := jwt.ParseSigned(sanitizeJWT(jwtToken), []jose.SignatureAlgorithm{jose.EdDSA, jose.HS256, jose.HS384,
+		jose.HS512, jose.RS512, jose.RS256, jose.ES256, jose.ES384, jose.ES512, jose.PS256, jose.PS384, jose.PS512})
 	if err != nil {
 		return false
 	}

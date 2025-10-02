@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/alertmanager/config"
-	"github.com/prometheus/alertmanager/pkg/labels"
 	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/require"
 
@@ -26,28 +24,31 @@ import (
 	"github.com/grafana/grafana/pkg/services/quota/quotatest"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/tests/testinfra"
+	"github.com/grafana/grafana/pkg/util/testutil"
 )
 
 func TestIntegrationAdminConfiguration_SendingToExternalAlertmanagers(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	testinfra.SQLiteIntegrationTest(t)
 
-	const disableOrgID int64 = 3
+	const disableOrgID int64 = 2
 	dir, path := testinfra.CreateGrafDir(t, testinfra.GrafanaOpts{
 		DisableLegacyAlerting:          true,
 		EnableUnifiedAlerting:          true,
 		DisableAnonymous:               true,
 		NGAlertAdminConfigPollInterval: 2 * time.Second,
-		UnifiedAlertingDisabledOrgs:    []int64{disableOrgID}, // disable unified alerting for organisation 3
+		UnifiedAlertingDisabledOrgs:    []int64{disableOrgID}, // disable unified alerting for organisation 2
 		AppModeProduction:              true,
 	})
 
-	grafanaListedAddr, s := testinfra.StartGrafana(t, dir, path)
+	grafanaListedAddr, env := testinfra.StartGrafanaEnv(t, dir, path)
 
-	orgService, err := orgimpl.ProvideService(s, s.Cfg, quotatest.New(false, nil))
+	orgService, err := orgimpl.ProvideService(env.SQLStore, env.Cfg, quotatest.New(false, nil))
 	require.NoError(t, err)
 
 	// Create a user to make authenticated requests
-	userID := createUser(t, s, user.CreateUserCommand{
+	userID := createUser(t, env.SQLStore, env.Cfg, user.CreateUserCommand{
 		DefaultOrgRole: string(org.RoleAdmin),
 		Login:          "grafana",
 		Password:       "password",
@@ -63,7 +64,7 @@ func TestIntegrationAdminConfiguration_SendingToExternalAlertmanagers(t *testing
 	require.Equal(t, disableOrgID, orgID)
 
 	// create user under different organisation
-	createUser(t, s, user.CreateUserCommand{
+	createUser(t, env.SQLStore, env.Cfg, user.CreateUserCommand{
 		DefaultOrgRole: string(org.RoleAdmin),
 		Password:       "admin-42",
 		Login:          "admin-42",
@@ -353,50 +354,4 @@ func TestIntegrationAdminConfiguration_SendingToExternalAlertmanagers(t *testing
 			return len(alertmanagers.Data.Active) == 0
 		}, 16*time.Second, 8*time.Second) // the sync interval is 2s so after 8s all alertmanagers (if any) most probably are started
 	}
-}
-
-func TestIntegrationAdminConfiguration_CannotCreateInhibitionRules(t *testing.T) {
-	testinfra.SQLiteIntegrationTest(t)
-	dir, path := testinfra.CreateGrafDir(t, testinfra.GrafanaOpts{
-		DisableLegacyAlerting: true,
-		EnableUnifiedAlerting: true,
-		AppModeProduction:     true,
-	})
-	grafanaListedAddr, store := testinfra.StartGrafana(t, dir, path)
-	createUser(t, store, user.CreateUserCommand{
-		DefaultOrgRole: string(org.RoleAdmin),
-		Password:       "admin",
-		Login:          "admin",
-	})
-	client := newAlertingApiClient(grafanaListedAddr, "admin", "admin")
-
-	cfg := apimodels.PostableUserConfig{
-		AlertmanagerConfig: apimodels.PostableApiAlertingConfig{
-			Config: apimodels.Config{
-				Route: &apimodels.Route{
-					Receiver: "test",
-				},
-				InhibitRules: []config.InhibitRule{{
-					SourceMatchers: config.Matchers{{
-						Type:  labels.MatchEqual,
-						Name:  "foo",
-						Value: "bar",
-					}},
-					TargetMatchers: config.Matchers{{
-						Type:  labels.MatchEqual,
-						Name:  "bar",
-						Value: "baz",
-					}},
-				}},
-			},
-			Receivers: []*apimodels.PostableApiReceiver{{
-				Receiver: config.Receiver{
-					Name: "test",
-				},
-			}},
-		},
-	}
-	ok, err := client.PostConfiguration(t, cfg)
-	require.False(t, ok)
-	require.EqualError(t, err, "inhibition rules are not supported")
 }

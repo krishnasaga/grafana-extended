@@ -1,23 +1,25 @@
 import { action } from '@storybook/addon-actions';
 import { Meta } from '@storybook/react';
-import React from 'react';
-
-import { ToolbarButton, VerticalGroup } from '@grafana/ui';
 
 import { StoryExample } from '../../utils/storybook/StoryExample';
 import { IconButton } from '../IconButton/IconButton';
+import { Stack } from '../Layout/Stack/Stack';
+import { ToolbarButton } from '../ToolbarButton/ToolbarButton';
 
 import { PageToolbar } from './PageToolbar';
 
 const meta: Meta<typeof PageToolbar> = {
-  title: 'Layout/PageToolbar',
+  title: 'Navigation/Deprecated/PageToolbar',
   component: PageToolbar,
-  parameters: {},
+  parameters: {
+    // TODO fix a11y issue in story and remove this
+    a11y: { test: 'off' },
+  },
 };
 
 export const Examples = () => {
   return (
-    <VerticalGroup>
+    <Stack direction="column">
       <StoryExample name="With non clickable title">
         <PageToolbar pageIcon="bell" title="Dashboard">
           <ToolbarButton icon="panel-add" />
@@ -50,7 +52,7 @@ export const Examples = () => {
           <ToolbarButton>Apply</ToolbarButton>
         </PageToolbar>
       </StoryExample>
-    </VerticalGroup>
+    </Stack>
   );
 };
 

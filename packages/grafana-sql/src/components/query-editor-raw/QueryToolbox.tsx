@@ -1,8 +1,9 @@
 import { css } from '@emotion/css';
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
+import { t } from '@grafana/i18n';
 import { reportInteraction } from '@grafana/runtime';
-import { HorizontalGroup, Icon, IconButton, Tooltip, useTheme2 } from '@grafana/ui';
+import { Stack, Icon, IconButton, Tooltip, useTheme2 } from '@grafana/ui';
 
 import { QueryValidator, QueryValidatorProps } from './QueryValidator';
 
@@ -20,31 +21,31 @@ export function QueryToolbox({ showTools, onFormatCode, onExpand, isExpanded, ..
 
   const styles = useMemo(() => {
     return {
-      container: css`
-        border: 1px solid ${theme.colors.border.medium};
-        border-top: none;
-        padding: ${theme.spacing(0.5, 0.5, 0.5, 0.5)};
-        display: flex;
-        flex-grow: 1;
-        justify-content: space-between;
-        font-size: ${theme.typography.bodySmall.fontSize};
-      `,
-      error: css`
-        color: ${theme.colors.error.text};
-        font-size: ${theme.typography.bodySmall.fontSize};
-        font-family: ${theme.typography.fontFamilyMonospace};
-      `,
-      valid: css`
-        color: ${theme.colors.success.text};
-      `,
-      info: css`
-        color: ${theme.colors.text.secondary};
-      `,
-      hint: css`
-        color: ${theme.colors.text.disabled};
-        white-space: nowrap;
-        cursor: help;
-      `,
+      container: css({
+        border: `1px solid ${theme.colors.border.medium}`,
+        borderTop: 'none',
+        padding: theme.spacing(0.5, 0.5, 0.5, 0.5),
+        display: 'flex',
+        flexGrow: 1,
+        justifyContent: 'space-between',
+        fontSize: theme.typography.bodySmall.fontSize,
+      }),
+      error: css({
+        color: theme.colors.error.text,
+        fontSize: theme.typography.bodySmall.fontSize,
+        fontFamily: theme.typography.fontFamilyMonospace,
+      }),
+      valid: css({
+        color: theme.colors.success.text,
+      }),
+      info: css({
+        color: theme.colors.text.secondary,
+      }),
+      hint: css({
+        color: theme.colors.text.disabled,
+        whiteSpace: 'nowrap',
+        cursor: 'help',
+      }),
     };
   }, [theme]);
 
@@ -69,7 +70,7 @@ export function QueryToolbox({ showTools, onFormatCode, onExpand, isExpanded, ..
       </div>
       {showTools && (
         <div>
-          <HorizontalGroup spacing="sm">
+          <Stack gap={1}>
             {onFormatCode && (
               <IconButton
                 onClick={() => {
@@ -80,7 +81,7 @@ export function QueryToolbox({ showTools, onFormatCode, onExpand, isExpanded, ..
                 }}
                 name="brackets-curly"
                 size="xs"
-                tooltip="Format query"
+                tooltip={t('grafana-sql.components.query-toolbox.tooltip-format-query', 'Format query')}
               />
             )}
             {onExpand && (
@@ -95,13 +96,22 @@ export function QueryToolbox({ showTools, onFormatCode, onExpand, isExpanded, ..
                 }}
                 name={isExpanded ? 'angle-up' : 'angle-down'}
                 size="xs"
-                tooltip={isExpanded ? 'Collapse editor' : 'Expand editor'}
+                tooltip={
+                  isExpanded
+                    ? t('grafana-sql.components.query-toolbox.tooltip-collapse', 'Collapse editor')
+                    : t('grafana-sql.components.query-toolbox.tooltip-expand', 'Expand editor')
+                }
               />
             )}
-            <Tooltip content="Hit CTRL/CMD+Return to run query">
+            <Tooltip
+              content={t(
+                'grafana-sql.components.query-toolbox.content-hit-ctrlcmdreturn-to-run-query',
+                'Hit CTRL/CMD+Return to run query'
+              )}
+            >
               <Icon className={styles.hint} name="keyboard" />
             </Tooltip>
-          </HorizontalGroup>
+          </Stack>
         </div>
       )}
     </div>

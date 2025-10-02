@@ -1,23 +1,30 @@
-import React, { useCallback } from 'react';
+import { ReactNode, useCallback } from 'react';
 
 import { DataFrameView, toDataFrame } from '@grafana/data';
-import { Button, Card } from '@grafana/ui';
-import { Trans } from 'app/core/internationalization';
+import { Trans, t } from '@grafana/i18n';
+import { Button, EmptyState } from '@grafana/ui';
 import { useKeyNavigationListener } from 'app/features/search/hooks/useSearchKeyboardSelection';
 import { SearchResultsProps, SearchResultsTable } from 'app/features/search/page/components/SearchResultsTable';
-import { useSearchStateManager } from 'app/features/search/state/SearchStateManager';
-import { DashboardViewItemKind } from 'app/features/search/types';
-import { useDispatch, useSelector } from 'app/types';
+import { SearchStateManager } from 'app/features/search/state/SearchStateManager';
+import { DashboardViewItemKind, SearchState } from 'app/features/search/types';
+import { useDispatch, useSelector } from 'app/types/store';
 
-import { setAllSelection, setItemSelectionState, useHasSelection } from '../state';
+import { useHasSelection } from '../state/hooks';
+import { setAllSelection, setItemSelectionState } from '../state/slice';
+import { BrowseDashboardsPermissions } from '../types';
+
+import { canEditItemType, canSelectItems } from './utils';
 
 interface SearchViewProps {
   height: number;
   width: number;
-  canSelect: boolean;
+  permissions: BrowseDashboardsPermissions;
+  searchState: SearchState;
+  searchStateManager: SearchStateManager;
+  emptyState?: ReactNode;
 }
 
-const NUM_PLACEHOLDER_ROWS = 50;
+const NUM_PLACEHOLDER_ROWS = 25;
 const initialLoadingView = {
   view: new DataFrameView(
     toDataFrame({
@@ -41,13 +48,19 @@ const initialLoadingView = {
   totalRows: NUM_PLACEHOLDER_ROWS,
 };
 
-export function SearchView({ width, height, canSelect }: SearchViewProps) {
+export function SearchView({
+  width,
+  height,
+  permissions,
+  searchState,
+  searchStateManager: stateManager,
+  emptyState: emptyStateProp,
+}: SearchViewProps) {
   const dispatch = useDispatch();
   const selectedItems = useSelector((wholeState) => wholeState.browseDashboards.selectedItems);
   const hasSelection = useHasSelection();
 
   const { keyboardEvents } = useKeyNavigationListener();
-  const [searchState, stateManager] = useSearchStateManager();
 
   const value = searchState.result ?? initialLoadingView;
 
@@ -57,7 +70,12 @@ export function SearchView({ width, height, canSelect }: SearchViewProps) {
         return false;
       }
 
-      // Currently, this indicates _some_ items are selected, not nessicarily all are
+      // Check if user has permission to select this item type
+      if (!canEditItemType(kind, permissions)) {
+        return false;
+      }
+
+      // Currently, this indicates _some_ items are selected, not necessarily all are
       // selected.
       if (kind === '*' && uid === '*') {
         return hasSelection;
@@ -68,7 +86,7 @@ export function SearchView({ width, height, canSelect }: SearchViewProps) {
 
       return selectedItems[assertDashboardViewItemKind(kind)][uid] ?? false;
     },
-    [selectedItems, hasSelection]
+    [selectedItems, hasSelection, permissions]
   );
 
   const clearSelection = useCallback(() => {
@@ -77,32 +95,37 @@ export function SearchView({ width, height, canSelect }: SearchViewProps) {
 
   const handleItemSelectionChange = useCallback(
     (kind: string, uid: string) => {
+      if (!canEditItemType(kind, permissions)) {
+        return; // Cannot select this item
+      }
+
       const newIsSelected = !selectionChecker(kind, uid);
 
       dispatch(
         setItemSelectionState({ item: { kind: assertDashboardViewItemKind(kind), uid }, isSelected: newIsSelected })
       );
     },
-    [selectionChecker, dispatch]
+    [selectionChecker, dispatch, permissions]
   );
 
   if (value.totalRows === 0) {
-    return (
-      <div style={{ width }}>
-        <Card>
-          <Card.Heading>
-            <Trans i18nKey="browse-dashboards.no-results.text">No results found for your query.</Trans>
-          </Card.Heading>
-          <Card.Actions>
-            <Button variant="secondary" onClick={stateManager.onClearSearchAndFilters}>
-              <Trans i18nKey="browse-dashboards.no-results.clear">Clear search and filters</Trans>
-            </Button>
-          </Card.Actions>
-        </Card>
-      </div>
+    const emptyState = emptyStateProp ?? (
+      <EmptyState
+        button={
+          <Button variant="secondary" onClick={stateManager.onClearSearchAndFilters}>
+            <Trans i18nKey="browse-dashboards.no-results.clear">Clear search and filters</Trans>
+          </Button>
+        }
+        message={t('browse-dashboards.no-results.text', 'No results found for your query')}
+        variant="not-found"
+        role="alert"
+      />
     );
+
+    return <div style={{ width }}>{emptyState}</div>;
   }
 
+  const canSelect = canSelectItems(permissions);
   const props: SearchResultsProps = {
     response: value,
     selection: canSelect ? selectionChecker : undefined,
@@ -113,7 +136,7 @@ export function SearchView({ width, height, canSelect }: SearchViewProps) {
     onTagSelected: stateManager.onAddTag,
     keyboardEvents,
     onDatasourceChange: searchState.datasource ? stateManager.onDatasourceChange : undefined,
-    onClickItem: stateManager.onSearchItemClicked,
+    onClickItem: searchState.deleted ? undefined : stateManager.onSearchItemClicked,
   };
 
   return <SearchResultsTable {...props} />;

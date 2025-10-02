@@ -8,6 +8,7 @@ import (
 
 	"github.com/grafana/grafana-openapi-client-go/client/folders"
 	"github.com/grafana/grafana-openapi-client-go/models"
+
 	"github.com/grafana/grafana/pkg/services/accesscontrol/resourcepermissions"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/folder"
@@ -17,6 +18,8 @@ import (
 	"github.com/grafana/grafana/pkg/tests/testinfra"
 	"github.com/grafana/grafana/pkg/tests/testsuite"
 	"github.com/grafana/grafana/pkg/util/retryer"
+	"github.com/grafana/grafana/pkg/util/testutil"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,46 +28,48 @@ func TestMain(m *testing.M) {
 	testsuite.Run(m)
 }
 
-func TestGetFolders(t *testing.T) {
+func TestIntegrationGetFolders(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	// Setup Grafana and its Database
 	dir, p := testinfra.CreateGrafDir(t, testinfra.GrafanaOpts{
 		DisableLegacyAlerting: true,
 		EnableUnifiedAlerting: true,
 		DisableAnonymous:      true,
 		AppModeProduction:     true,
-		EnableFeatureToggles:  []string{featuremgmt.FlagNestedFolders},
 	})
 
-	grafanaListedAddr, store := testinfra.StartGrafana(t, dir, p)
+	grafanaListedAddr, env := testinfra.StartGrafanaEnv(t, dir, p)
+	store, cfg := env.SQLStore, env.Cfg
 
 	orgID := int64(1)
 
 	// Create a users to make authenticated requests
-	tests.CreateUser(t, store, user.CreateUserCommand{
+	tests.CreateUser(t, store, cfg, user.CreateUserCommand{
 		DefaultOrgRole: string(org.RoleViewer),
 		OrgID:          orgID,
 		Password:       "viewer",
 		Login:          "viewer",
 	})
-	tests.CreateUser(t, store, user.CreateUserCommand{
+	tests.CreateUser(t, store, cfg, user.CreateUserCommand{
 		OrgID:          orgID,
 		DefaultOrgRole: string(org.RoleEditor),
 		Password:       "editor",
 		Login:          "editor",
 	})
-	tests.CreateUser(t, store, user.CreateUserCommand{
+	tests.CreateUser(t, store, cfg, user.CreateUserCommand{
 		OrgID:          orgID,
 		DefaultOrgRole: string(org.RoleAdmin),
 		Password:       "admin",
-		Login:          "admin",
+		Login:          "admin2",
 	})
 
-	adminClient := tests.GetClient(grafanaListedAddr, "admin", "admin")
+	adminClient := tests.GetClient(grafanaListedAddr, "admin2", "admin")
 	editorClient := tests.GetClient(grafanaListedAddr, "editor", "editor")
 	viewerClient := tests.GetClient(grafanaListedAddr, "viewer", "viewer")
 
 	// access control permissions store
-	permissionsStore := resourcepermissions.NewStore(store, featuremgmt.WithFeatures())
+	permissionsStore := resourcepermissions.NewStore(cfg, store, featuremgmt.WithFeatures())
 
 	numberOfFolders := 5
 	indexWithoutPermission := 3

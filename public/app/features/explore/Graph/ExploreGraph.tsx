@@ -1,37 +1,38 @@
-import { identity } from 'lodash';
-import React, { useEffect, useMemo, useState } from 'react';
-import { usePrevious } from 'react-use';
+import { identity, isEqual, sortBy } from 'lodash';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import * as React from 'react';
 
 import {
   AbsoluteTimeRange,
   applyFieldOverrides,
   createFieldConfigRegistry,
+  DashboardCursorSync,
   DataFrame,
-  dateTime,
+  DataLinksContext,
+  EventBus,
   FieldColorModeId,
   FieldConfigSource,
   getFrameDisplayName,
   LoadingState,
   SplitOpen,
   ThresholdsConfig,
-  DashboardCursorSync,
-  EventBus,
+  TimeRange,
 } from '@grafana/data';
 import { PanelRenderer } from '@grafana/runtime';
 import {
   GraphDrawStyle,
-  LegendDisplayMode,
-  TooltipDisplayMode,
-  SortOrder,
+  GraphFieldConfig,
   GraphThresholdsStyleConfig,
+  LegendDisplayMode,
+  SortOrder,
   TimeZone,
+  TooltipDisplayMode,
   VizLegendOptions,
 } from '@grafana/schema';
 import { PanelContext, PanelContextProvider, SeriesVisibilityChangeMode, useTheme2 } from '@grafana/ui';
-import { GraphFieldConfig } from 'app/plugins/panel/graph/types';
 import { defaultGraphConfig, getGraphFieldConfig } from 'app/plugins/panel/timeseries/config';
 import { Options as TimeSeriesOptions } from 'app/plugins/panel/timeseries/panelcfg.gen';
-import { ExploreGraphStyle } from 'app/types';
+import { ExploreGraphStyle } from 'app/types/explore';
 
 import { seriesVisibilityConfigFactory } from '../../dashboard/dashgrid/SeriesVisibilityConfigFactory';
 import { useExploreDataLinkPostProcessor } from '../hooks/useExploreDataLinkPostProcessor';
@@ -43,7 +44,7 @@ interface Props {
   data: DataFrame[];
   height: number;
   width: number;
-  absoluteRange: AbsoluteTimeRange;
+  timeRange: TimeRange;
   timeZone: TimeZone;
   loadingState: LoadingState;
   annotations?: DataFrame[];
@@ -58,6 +59,7 @@ interface Props {
   thresholdsStyle?: GraphThresholdsStyleConfig;
   eventBus: EventBus;
   vizLegendOverrides?: Partial<VizLegendOptions>;
+  toggleLegendRef?: React.MutableRefObject<(name: string | undefined, mode: SeriesVisibilityChangeMode) => void>;
 }
 
 export function ExploreGraph({
@@ -65,7 +67,7 @@ export function ExploreGraph({
   height,
   width,
   timeZone,
-  absoluteRange,
+  timeRange,
   onChangeTime,
   loadingState,
   annotations,
@@ -79,21 +81,9 @@ export function ExploreGraph({
   thresholdsStyle,
   eventBus,
   vizLegendOverrides,
+  toggleLegendRef,
 }: Props) {
   const theme = useTheme2();
-  const previousTimeRange = usePrevious(absoluteRange);
-  const baseTimeRange = loadingState === LoadingState.Loading && previousTimeRange ? previousTimeRange : absoluteRange;
-  const timeRange = useMemo(
-    () => ({
-      from: dateTime(baseTimeRange.from),
-      to: dateTime(baseTimeRange.to),
-      raw: {
-        from: dateTime(baseTimeRange.from),
-        to: dateTime(baseTimeRange.to),
-      },
-    }),
-    [baseTimeRange.from, baseTimeRange.to]
-  );
 
   const fieldConfigRegistry = useMemo(
     () => createFieldConfigRegistry(getGraphFieldConfig(defaultGraphConfig), 'Explore'),
@@ -132,9 +122,8 @@ export function ExploreGraph({
       replaceVariables: (value) => value, // We don't need proper replace here as it is only used in getLinks and we use getFieldLinks
       theme,
       fieldConfigRegistry,
-      dataLinkPostProcessor,
     });
-  }, [fieldConfigRegistry, data, timeZone, theme, styledFieldConfig, dataLinkPostProcessor]);
+  }, [fieldConfigRegistry, data, timeZone, theme, styledFieldConfig]);
 
   const annotationsWithConfig = useMemo(() => {
     return applyFieldOverrides({
@@ -152,15 +141,24 @@ export function ExploreGraph({
 
   const structureRev = useStructureRev(dataWithConfig);
 
+  const previousHiddenFrames = useRef<string[] | undefined>(undefined);
+
   useEffect(() => {
-    if (onHiddenSeriesChanged) {
-      const hiddenFrames: string[] = [];
-      dataWithConfig.forEach((frame) => {
-        const allFieldsHidden = frame.fields.map((field) => field.config?.custom?.hideFrom?.viz).every(identity);
-        if (allFieldsHidden) {
-          hiddenFrames.push(getFrameDisplayName(frame));
-        }
-      });
+    if (!onHiddenSeriesChanged) {
+      return;
+    }
+    const hiddenFrames: string[] = [];
+    dataWithConfig.forEach((frame) => {
+      const allFieldsHidden = frame.fields.map((field) => field.config?.custom?.hideFrom?.viz).every(identity);
+      if (allFieldsHidden) {
+        hiddenFrames.push(getFrameDisplayName(frame));
+      }
+    });
+    if (
+      previousHiddenFrames.current === undefined ||
+      !isEqual(sortBy(hiddenFrames), sortBy(previousHiddenFrames.current))
+    ) {
+      previousHiddenFrames.current = hiddenFrames;
       onHiddenSeriesChanged(hiddenFrames);
     }
   }, [dataWithConfig, onHiddenSeriesChanged]);
@@ -173,8 +171,22 @@ export function ExploreGraph({
     onToggleSeriesVisibility(label: string, mode: SeriesVisibilityChangeMode) {
       setFieldConfig(seriesVisibilityConfigFactory(label, mode, fieldConfig, data));
     },
-    dataLinkPostProcessor,
   };
+
+  function toggleLegend(name: string | undefined, mode: SeriesVisibilityChangeMode) {
+    if (!name) {
+      setFieldConfig({
+        ...fieldConfig,
+        overrides: [],
+      });
+      return;
+    }
+    setFieldConfig(seriesVisibilityConfigFactory(name, mode, fieldConfig, data));
+  }
+
+  if (toggleLegendRef) {
+    toggleLegendRef.current = toggleLegend;
+  }
 
   const panelOptions: TimeSeriesOptions = useMemo(
     () => ({
@@ -191,23 +203,25 @@ export function ExploreGraph({
   );
 
   return (
-    <PanelContextProvider value={panelContext}>
-      <PanelRenderer
-        data={{
-          series: dataWithConfig,
-          timeRange,
-          state: loadingState,
-          annotations: annotationsWithConfig,
-          structureRev,
-        }}
-        pluginId="timeseries"
-        title=""
-        width={width}
-        height={height}
-        onChangeTimeRange={onChangeTime}
-        timeZone={timeZone}
-        options={panelOptions}
-      />
-    </PanelContextProvider>
+    <DataLinksContext.Provider value={{ dataLinkPostProcessor }}>
+      <PanelContextProvider value={panelContext}>
+        <PanelRenderer
+          data={{
+            series: dataWithConfig,
+            timeRange,
+            state: loadingState,
+            annotations: annotationsWithConfig,
+            structureRev,
+          }}
+          pluginId="timeseries"
+          title=""
+          width={width}
+          height={height}
+          onChangeTimeRange={onChangeTime}
+          timeZone={timeZone}
+          options={panelOptions}
+        />
+      </PanelContextProvider>
+    </DataLinksContext.Provider>
   );
 }

@@ -1,6 +1,6 @@
 import { AnyAction } from '@reduxjs/toolkit';
-import { omit } from 'lodash';
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
+import * as React from 'react';
 
 import {
   DataSourcePluginContextProvider,
@@ -8,18 +8,15 @@ import {
   DataSourceSettings as DataSourceSettingsType,
   PluginExtensionPoints,
   PluginExtensionDataSourceConfigContext,
-  DataSourceJsonData,
   DataSourceUpdatedSuccessfully,
 } from '@grafana/data';
-import { getDataSourceSrv, getPluginComponentExtensions } from '@grafana/runtime';
+import { getDataSourceSrv, usePluginComponents, UsePluginComponentsResult } from '@grafana/runtime';
 import appEvents from 'app/core/app_events';
 import PageLoader from 'app/core/components/PageLoader/PageLoader';
-import { DataSourceSettingsState, useDispatch } from 'app/types';
+import { DataSourceSettingsState } from 'app/types/datasources';
+import { useDispatch } from 'app/types/store';
 
 import {
-  dataSourceLoaded,
-  setDataSourceName,
-  setIsDefault,
   useDataSource,
   useDataSourceExploreUrl,
   useDataSourceMeta,
@@ -29,7 +26,8 @@ import {
   useInitDataSourceSettings,
   useTestDataSource,
   useUpdateDatasource,
-} from '../state';
+} from '../state/hooks';
+import { setIsDefault, setDataSourceName, dataSourceLoaded } from '../state/reducers';
 import { trackDsConfigClicked, trackDsConfigUpdated } from '../tracking';
 import { DataSourceRights } from '../types';
 
@@ -116,7 +114,23 @@ export function EditDataSourceView({
 }: ViewProps) {
   const { plugin, loadError, testingStatus, loading } = dataSourceSettings;
   const { readOnly, hasWriteRights, hasDeleteRights } = dataSourceRights;
-  const hasDataSource = dataSource.id > 0;
+  const hasDataSource = dataSource.id > 0 && dataSource.uid;
+  const { components, isLoading } = useDataSourceConfigPluginExtensions();
+  // This is a workaround to avoid race-conditions between the `setSecureJsonData()` and `setJsonData()` calls instantiated by the extension components.
+  // Both those exposed functions are calling `onOptionsChange()` with the new jsonData and secureJsonData, and if they are called in the same tick, the Redux store
+  // (which provides the `datasource` object) won't be updated yet, and they override each others `jsonData` value.
+  let currentJsonData = dataSource.jsonData;
+  let currentSecureJsonData = dataSource.secureJsonData;
+
+  const isPDCInjected = components.some((component) => component.meta.pluginId === 'grafana-pdc-app');
+
+  const dataSourceWithIsPDCInjected = {
+    ...dataSource,
+    jsonData: {
+      ...dataSource.jsonData,
+      pdcInjected: isPDCInjected,
+    },
+  };
 
   const dsi = getDataSourceSrv()?.getInstanceSettings(dataSource.uid);
 
@@ -129,24 +143,21 @@ export function EditDataSourceView({
       trackDsConfigUpdated({ item: 'success' });
       appEvents.publish(new DataSourceUpdatedSuccessfully());
     } catch (error) {
-      trackDsConfigUpdated({ item: 'fail', error });
+      trackDsConfigUpdated({ item: 'fail' });
       return;
     }
 
     onTest();
   };
 
-  const extensions = useMemo(() => {
-    const allowedPluginIds = ['grafana-pdc-app', 'grafana-auth-app'];
-    const extensionPointId = PluginExtensionPoints.DataSourceConfig;
-    const { extensions } = getPluginComponentExtensions({ extensionPointId });
+  if (loading || isLoading) {
+    return <PageLoader />;
+  }
 
-    return extensions.filter((e) => allowedPluginIds.includes(e.pluginId));
-  }, []);
-
-  if (loadError) {
+  if (loadError || !hasDataSource || !dsi) {
     return (
       <DataSourceLoadError
+        notFound={!hasDataSource || !dsi}
         dataSourceRights={dataSourceRights}
         onDelete={() => {
           trackDsConfigClicked('delete');
@@ -154,15 +165,6 @@ export function EditDataSourceView({
         }}
       />
     );
-  }
-
-  if (loading) {
-    return <PageLoader />;
-  }
-
-  // TODO - is this needed?
-  if (!hasDataSource || !dsi) {
-    return null;
   }
 
   if (pageId) {
@@ -193,7 +195,7 @@ export function EditDataSourceView({
         <DataSourcePluginContextProvider instanceSettings={dsi}>
           <DataSourcePluginSettings
             plugin={plugin}
-            dataSource={dataSource}
+            dataSource={dataSourceWithIsPDCInjected}
             dataSourceMeta={dataSourceMeta}
             onModelChange={onOptionsChange}
           />
@@ -201,23 +203,30 @@ export function EditDataSourceView({
       )}
 
       {/* Extension point */}
-      {extensions.map((extension) => {
-        const Component = extension.component as React.ComponentType<{
-          context: PluginExtensionDataSourceConfigContext<DataSourceJsonData>;
-        }>;
-
+      {components.map((Component) => {
         return (
-          <div key={extension.id}>
+          <div key={Component.meta.id}>
             <Component
               context={{
-                dataSource: omit(dataSource, ['secureJsonData']),
-                dataSourceMeta: dataSourceMeta,
+                dataSource,
+                dataSourceMeta,
                 testingStatus,
-                setJsonData: (jsonData) =>
+                setJsonData: (jsonData) => {
+                  currentJsonData = { ...currentJsonData, ...jsonData };
                   onOptionsChange({
                     ...dataSource,
-                    jsonData: { ...dataSource.jsonData, ...jsonData },
-                  }),
+                    secureJsonData: { ...currentSecureJsonData },
+                    jsonData: currentJsonData,
+                  });
+                },
+                setSecureJsonData: (secureJsonData) => {
+                  currentSecureJsonData = { ...currentSecureJsonData, ...secureJsonData };
+                  onOptionsChange({
+                    ...dataSource,
+                    jsonData: { ...currentJsonData },
+                    secureJsonData: currentSecureJsonData,
+                  });
+                },
               }}
             />
           </div>
@@ -241,4 +250,28 @@ export function EditDataSourceView({
       />
     </form>
   );
+}
+
+type DataSourceConfigPluginExtensionProps = {
+  context: PluginExtensionDataSourceConfigContext;
+};
+
+function useDataSourceConfigPluginExtensions(): UsePluginComponentsResult<DataSourceConfigPluginExtensionProps> {
+  const { components, isLoading } = usePluginComponents<DataSourceConfigPluginExtensionProps>({
+    extensionPointId: PluginExtensionPoints.DataSourceConfig,
+  });
+
+  return useMemo(() => {
+    const allowedComponents = components.filter((component) => {
+      switch (component.meta.pluginId) {
+        case 'grafana-pdc-app':
+        case 'grafana-auth-app':
+          return true;
+        default:
+          return false;
+      }
+    });
+
+    return { components: allowedComponents, isLoading };
+  }, [components, isLoading]);
 }

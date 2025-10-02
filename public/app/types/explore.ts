@@ -19,9 +19,8 @@ import {
   ExploreCorrelationHelperData,
   DataLinkTransformationConfig,
 } from '@grafana/data';
+import { CorrelationData } from '@grafana/runtime';
 import { RichHistorySearchFilters, RichHistorySettings } from 'app/core/utils/richHistoryTypes';
-
-import { CorrelationData } from '../features/correlations/useCorrelations';
 
 export type ExploreQueryParams = UrlQueryMap;
 
@@ -62,6 +61,13 @@ export interface ExploreState {
   syncedTimes: boolean;
 
   panes: Record<string, ExploreItemState | undefined>;
+
+  /**
+   * History of all queries
+   */
+  richHistory: RichHistoryQuery[];
+  richHistorySearchFilters?: RichHistorySearchFilters;
+  richHistoryTotal?: number;
 
   /**
    * Settings for rich history (note: filters are stored per each pane separately)
@@ -135,6 +141,11 @@ export interface ExploreItemState {
    */
   initialized: boolean;
   /**
+   * Query library reference identifier when editing a query from the query library
+   *
+   */
+  queryLibraryRef?: string;
+  /**
    * Log query result to be displayed in the logs result viewer.
    */
   logsResult: LogsModel | null;
@@ -207,13 +218,6 @@ export interface ExploreItemState {
   showCustom?: boolean;
 
   /**
-   * History of all queries
-   */
-  richHistory: RichHistoryQuery[];
-  richHistorySearchFilters?: RichHistorySearchFilters;
-  richHistoryTotal?: number;
-
-  /**
    * We are using caching to store query responses of queries run from logs navigation.
    * In logs navigation, we do pagination and we don't want our users to unnecessarily run the same queries that they've run just moments before.
    * We are currently caching last 5 query responses.
@@ -230,6 +234,11 @@ export interface ExploreItemState {
   correlationEditorHelperData?: ExploreCorrelationHelperData;
 
   correlations?: CorrelationData[];
+
+  /**
+   * If set to true, all query rows will be collapsed initially and the content outline will be hidden
+   */
+  compact: boolean;
 }
 
 export interface ExploreUpdateState {

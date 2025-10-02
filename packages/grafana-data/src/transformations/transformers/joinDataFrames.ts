@@ -1,7 +1,6 @@
-import intersect from 'fast_array_intersect';
-
-import { getTimeField, sortDataFrame } from '../../dataframe';
-import { DataFrame, Field, FieldMatcher, FieldType, TIME_SERIES_VALUE_FIELD_NAME } from '../../types';
+import { getTimeField, sortDataFrame } from '../../dataframe/processDataFrame';
+import { DataFrame, Field, FieldType, TIME_SERIES_VALUE_FIELD_NAME } from '../../types/dataFrame';
+import { FieldMatcher } from '../../types/transformations';
 import { fieldMatchers } from '../matchers';
 import { FieldMatcherID } from '../matchers/ids';
 
@@ -168,10 +167,6 @@ export function joinDataFrames(options: JoinOptions): DataFrame | undefined {
   const nullModes: JoinNullMode[][] = [];
   const allData: AlignedData[] = [];
   const originalFields: Field[] = [];
-  // store frame field order for tabular data join
-  const originalFieldsOrderByFrame: number[][] = [];
-  // all other fields that are not the join on are in the 1+ position (join is always the 0)
-  let fieldsOrder = 1;
   const joinFieldMatcher = getJoinMatcher(options);
 
   for (let frameIndex = 0; frameIndex < options.frames.length; frameIndex++) {
@@ -184,7 +179,6 @@ export function joinDataFrames(options: JoinOptions): DataFrame | undefined {
     const nullModesFrame: JoinNullMode[] = [NULL_REMOVE];
     let join: Field | undefined = undefined;
     let fields: Field[] = [];
-    let frameFieldsOrder = [];
 
     for (let fieldIndex = 0; fieldIndex < frame.fields.length; fieldIndex++) {
       const field = frame.fields[fieldIndex];
@@ -205,7 +199,8 @@ export function joinDataFrames(options: JoinOptions): DataFrame | undefined {
         if (frame.name) {
           if (field.name === TIME_SERIES_VALUE_FIELD_NAME) {
             name = frame.name;
-          } else {
+          } else if (labels.name == null) {
+            // add the name label from frame
             labels = { ...labels, name: frame.name };
           }
         }
@@ -213,7 +208,7 @@ export function joinDataFrames(options: JoinOptions): DataFrame | undefined {
         fields.push({
           ...field,
           name,
-          labels, // add the name label from frame
+          labels,
         });
       }
 
@@ -243,19 +238,16 @@ export function joinDataFrames(options: JoinOptions): DataFrame | undefined {
         // clear field displayName state
         delete field.state?.displayName;
       }
-      // store frame field order for tabular data join
-      frameFieldsOrder.push(fieldsOrder);
-      fieldsOrder++;
     }
-    // store frame field order for tabular data join
-    originalFieldsOrderByFrame.push(frameFieldsOrder);
     allData.push(a);
   }
 
   let joined: Array<Array<number | string | null | undefined>> = [];
 
   if (options.mode === JoinMode.outerTabular) {
-    joined = joinOuterTabular(allData, originalFieldsOrderByFrame, originalFields.length, nullModes);
+    joined = joinTabular(allData, true);
+  } else if (options.mode === JoinMode.inner) {
+    joined = joinTabular(allData);
   } else {
     joined = join(allData, nullModes, options.mode);
   }
@@ -270,96 +262,201 @@ export function joinDataFrames(options: JoinOptions): DataFrame | undefined {
   };
 }
 
-// The following full outer join allows for multiple/duplicated joined fields values where as the performant join from uplot creates a unique set of field values to be joined on
-// http://www.silota.com/docs/recipes/sql-join-tutorial-javascript-examples.html
-// The frame field value which is used join on is sorted to the 0 position of each table data in both tables and nullModes
-// (not sure if we need nullModes) for nullModes, the field to join on is given NULL_REMOVE and all other fields are given NULL_EXPAND
-function joinOuterTabular(
-  tables: AlignedData[],
-  originalFieldsOrderByFrame: number[][],
-  numberOfFields: number,
-  nullModes?: number[][]
-) {
-  // we will iterate through all frames and check frames for matches preventing duplicates.
-  // we will store each matched frame "row" or field values at the same index in the following hash.
-  let duplicateHash: { [key: string]: Array<number | string | null | undefined> } = {};
+/**
+ * SQL-style join of tables, using the first column in each
+ */
+function joinTabular(tables: AlignedData[], outer = false) {
+  // console.time('joinTabular');
 
-  // iterate through the tables (frames)
-  // for each frame we get the field data where the data in the 0 pos is the value to join on
-  for (let tableIdx = 0; tableIdx < tables.length; tableIdx++) {
-    // the table (frame) to check for matches in other tables
-    let table = tables[tableIdx];
-    // the field value to join on (the join value is always in the 0 position)
-    let joinOnTableField = table[0];
+  let ltable = tables[0];
+  let lfield = ltable[0];
 
-    // now we iterate through the other table (frame) data to look for matches
-    for (let otherTablesIdx = 0; otherTablesIdx < tables.length; otherTablesIdx++) {
-      // do not match on the same table
-      if (otherTablesIdx === tableIdx) {
-        continue;
+  // iterate tables, merging right table with left, with the result becoming the new left
+  // rinse and repeat for each tables in the array
+  for (let ti = 1; ti < tables.length; ti++) {
+    let rtable = tables[ti];
+    let rfield = rtable[0];
+
+    /**
+     * Build an inverted index of the right table's join column like { "foo": [1,2,3], "bar": [7,12], ... }
+     * where the keys are unique values and the arrays are indices where these values were found
+     */
+    // console.time('index right');
+    let index: Record<string | number, number[]> = {};
+
+    for (let i = 0; i < rfield.length; i++) {
+      let val = rfield[i];
+
+      let idxs = index[val];
+
+      if (idxs == null) {
+        idxs = index[val] = [];
       }
 
-      let otherTable = tables[otherTablesIdx];
-      let otherTableJoinOnField = otherTable[0];
+      idxs.push(i);
+    }
+    // console.timeEnd('index right');
 
-      // iterate through the field to join on from the first table
-      for (
-        let joinTableFieldValuesIdx = 0;
-        joinTableFieldValuesIdx < joinOnTableField.length;
-        joinTableFieldValuesIdx++
-      ) {
-        // create the joined data
-        // this has the orignalFields length and should start out undefined
-        // joined row + number of other fields in each frame
-        // the order of each field is important in how we
-        // 1 check for duplicates
-        // 2 transform the row back into fields for the joined frame
-        // 3 when there is no match for the row we keep the vals undefined
-        const tableJoinOnValue = joinOnTableField[joinTableFieldValuesIdx];
-        const allOtherFields = numberOfFields - 1;
-        let joinedRow: Array<number | string | null | undefined> = [tableJoinOnValue].concat(new Array(allOtherFields));
+    /**
+     * Loop over the left table's join column and match each non-null value to the right index,
+     * copying the matched ridxs array into new matched list, like [33, [45,79,233]], where first
+     * value is left idx and second value is right idxs
+     *
+     * Also keep track of unmatched or null left values for outer join, since we'll need to include these
+     */
+    let matchedKeys = new Set();
+    let unmatchedLeft = [];
+    let unmatchedRight = [];
 
-        let tableFieldValIdx = 0;
-        for (let fieldsIdx = 1; fieldsIdx < table.length; fieldsIdx++) {
-          const joinRowIdx = originalFieldsOrderByFrame[tableIdx][tableFieldValIdx];
-          joinedRow[joinRowIdx] = table[fieldsIdx][joinTableFieldValuesIdx];
-          tableFieldValIdx++;
+    // console.time('match left');
+    let matched: Array<[lidx: number, ridxs: number[]]> = [];
+
+    // count of total number of output rows, so we can
+    // pre-allocate the final array size during materialization
+    let count = 0;
+
+    for (let i = 0; i < lfield.length; i++) {
+      let v = lfield[i];
+
+      if (v != null) {
+        let idxs = index[v];
+
+        if (idxs != null) {
+          matched.push([i, idxs]);
+          count += idxs.length;
+          outer && matchedKeys.add(v);
+        } else if (outer) {
+          unmatchedLeft.push(i);
         }
-
-        for (let otherTableValuesIdx = 0; otherTableValuesIdx < otherTableJoinOnField.length; otherTableValuesIdx++) {
-          if (joinOnTableField[joinTableFieldValuesIdx] === otherTableJoinOnField[otherTableValuesIdx]) {
-            let tableFieldValIdx = 0;
-            for (let fieldsIdx = 1; fieldsIdx < otherTable.length; fieldsIdx++) {
-              const joinRowIdx = originalFieldsOrderByFrame[otherTablesIdx][tableFieldValIdx];
-              joinedRow[joinRowIdx] = otherTable[fieldsIdx][otherTableValuesIdx];
-              tableFieldValIdx++;
-            }
-
-            break;
-          }
-        }
-
-        // prevent duplicates by entering rows in a hash where keys are the rows
-        duplicateHash[JSON.stringify(joinedRow)] = joinedRow;
+      } else if (outer) {
+        unmatchedLeft.push(i);
       }
     }
-  }
+    count += unmatchedLeft.length;
+    // console.timeEnd('match left');
 
-  // transform the joined rows into data for a dataframe
-  let data: Array<Array<number | string | null | undefined>> = [];
-  for (let field = 0; field < numberOfFields; field++) {
-    data.push(new Array(0));
-  }
-
-  for (let key in duplicateHash) {
-    const row = duplicateHash[key];
-
-    for (let valIdx = 0; valIdx < row.length; valIdx++) {
-      data[valIdx].push(row[valIdx]);
+    /**
+     * For outer joins, also loop over the right index to record unmatched values
+     */
+    // console.time('unmatched right');
+    if (outer) {
+      for (let k in index) {
+        if (!matchedKeys.has(k)) {
+          unmatchedRight.push(...index[k]);
+        }
+      }
+      count += unmatchedRight.length;
     }
+    // console.timeEnd('unmatched right');
+
+    /**
+     * Now we can use matched, unmatchedLeft, unmatchedRight, ltable, and rtable to assemble the final table
+     * Instead of using 3-deep nested loops, we eliminate the loops over the known column structure
+     * For this we compile a new function using the schemas from both tables, and filling that struct by looping
+     * over the matched lookup array, then appending the unmatched left rows (and null-filling the right values),
+     * then appending the unmatched right rows (and null-filling the left values).
+     *
+     * The assembled function looks something like this when joining 2-col left + 2-col right:
+     *
+     * function anonymous(matched, unmatchedLeft, unmatchedRight, ltable, rtable) {
+     *   const joined = [Array(99991),Array(99991),Array(99991)];
+     *
+     *   let rowIdx = 0;
+     *
+     *   for (let i = 0; i < matched.length; i++) {
+     *     let [lidx, ridxs] = matched[i];
+     *
+     *     for (let j = 0; j < ridxs.length; j++, rowIdx++) {
+     *       let ridx = ridxs[j];
+     *       joined[0][rowIdx] = ltable[0][lidx];
+     *       joined[1][rowIdx] = ltable[1][lidx];
+     *       joined[2][rowIdx] = rtable[1][ridx];
+     *     }
+     *   }
+     *
+     *   for (let i = 0; i < unmatchedLeft.length; i++, rowIdx++) {
+     *     let lidx = unmatchedLeft[i];
+     *     joined[0][rowIdx] = ltable[0][lidx];
+     *     joined[1][rowIdx] = ltable[1][lidx];
+     *     joined[2][rowIdx] = null;
+     *   }
+     *
+     *   for (let i = 0; i < unmatchedRight.length; i++, rowIdx++) {
+     *     let ridx = unmatchedRight[i];
+     *     joined[0][rowIdx] = rtable[0][ridx];
+     *     joined[1][rowIdx] = null;
+     *     joined[2][rowIdx] = rtable[1][ridx];
+     *   }
+     *
+     *   return joined;
+     * }
+     */
+    // console.time('materialize');
+    let outFieldsTpl = Array.from({ length: ltable.length + rtable.length - 1 }, () => `Array(${count})`).join(',');
+    let copyLeftRowTpl = ltable.map((c, i) => `joined[${i}][rowIdx] = ltable[${i}][lidx]`).join(';');
+    // (skips join field in right table)
+    let copyRightRowTpl = rtable
+      .slice(1)
+      .map((c, i) => `joined[${ltable.length + i}][rowIdx] = rtable[${i + 1}][ridx]`)
+      .join(';');
+
+    // for outer joins, when we null-fill the left row values, we still populate the first (join) column
+    // with the right row's join column value, rather than omitting it as we do for matched left/right where
+    // that value is already filled by the left row
+    let nullLeftRowTpl = ltable
+      .map((c, i) => `joined[${i}][rowIdx] = ${i === 0 ? `rtable[${i}][ridx]` : `null`}`)
+      .join(';');
+    // (skips join field in right table)
+    let nullRightRowTpl = rtable.slice(1).map((c, i) => `joined[${ltable.length + i}][rowIdx] = null`);
+
+    let materialize = new Function(
+      'matched',
+      'unmatchedLeft',
+      'unmatchedRight',
+      'ltable',
+      'rtable',
+      `
+      const joined = [${outFieldsTpl}];
+
+      let rowIdx = 0;
+
+      for (let i = 0; i < matched.length; i++) {
+        let [lidx, ridxs] = matched[i];
+
+        for (let j = 0; j < ridxs.length; j++, rowIdx++) {
+          let ridx = ridxs[j];
+          ${copyLeftRowTpl};
+          ${copyRightRowTpl};
+        }
+      }
+
+      for (let i = 0; i < unmatchedLeft.length; i++, rowIdx++) {
+        let lidx = unmatchedLeft[i];
+        ${copyLeftRowTpl};
+        ${nullRightRowTpl};
+      }
+
+      for (let i = 0; i < unmatchedRight.length; i++, rowIdx++) {
+        let ridx = unmatchedRight[i];
+        ${nullLeftRowTpl};
+        ${copyRightRowTpl};
+      }
+
+      return joined;
+      `
+    );
+
+    let joined = materialize(matched, unmatchedLeft, unmatchedRight, ltable, rtable);
+    // console.timeEnd('materialize');
+
+    ltable = joined;
+    lfield = ltable[0];
   }
 
-  return data;
+  // console.timeEnd('joinTabular');
+
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+  return ltable as Array<Array<string | number | null | undefined>>;
 }
 
 //--------------------------------------------------------------------------------
@@ -412,22 +509,15 @@ function nullExpand(yVals: Array<number | null>, nullIdxs: number[], alignedLen:
 
 // nullModes is a tables-matched array indicating how to treat nulls in each series
 export function join(tables: AlignedData[], nullModes?: number[][], mode: JoinMode = JoinMode.outer) {
-  let xVals: Set<number>;
+  let xVals: Set<number> = new Set();
 
-  if (mode === JoinMode.inner) {
-    // @ts-ignore
-    xVals = new Set(intersect(tables.map((t) => t[0])));
-  } else {
-    xVals = new Set();
+  for (let ti = 0; ti < tables.length; ti++) {
+    let t = tables[ti];
+    let xs = t[0];
+    let len = xs.length;
 
-    for (let ti = 0; ti < tables.length; ti++) {
-      let t = tables[ti];
-      let xs = t[0];
-      let len = xs.length;
-
-      for (let i = 0; i < len; i++) {
-        xVals.add(xs[i]);
-      }
+    for (let i = 0; i < len; i++) {
+      xVals.add(xs[i]);
     }
   }
 
@@ -482,7 +572,7 @@ export function join(tables: AlignedData[], nullModes?: number[][], mode: JoinMo
 
 // Test a few samples to see if the values are ascending
 // Only exported for tests
-export function isLikelyAscendingVector(data: any[], samples = 50) {
+export function isLikelyAscendingVector(data: unknown[], samples = 50) {
   const len = data.length;
 
   // empty or single value
@@ -512,7 +602,7 @@ export function isLikelyAscendingVector(data: any[], samples = 50) {
   for (let prevVal = data[firstIdx], i = firstIdx + stride; i <= lastIdx; i += stride) {
     const v = data[i];
 
-    if (v != null) {
+    if (v != null && prevVal != null) {
       if (v <= prevVal) {
         return false;
       }

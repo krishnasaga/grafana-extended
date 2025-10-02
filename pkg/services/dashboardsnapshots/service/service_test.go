@@ -10,24 +10,29 @@ import (
 	common "github.com/grafana/grafana/pkg/apimachinery/apis/common/v0alpha1"
 	dashboardsnapshot "github.com/grafana/grafana/pkg/apis/dashboardsnapshot/v0alpha1"
 	"github.com/grafana/grafana/pkg/infra/db"
+	"github.com/grafana/grafana/pkg/services/dashboards"
 	"github.com/grafana/grafana/pkg/services/dashboardsnapshots"
 	dashsnapdb "github.com/grafana/grafana/pkg/services/dashboardsnapshots/database"
 	"github.com/grafana/grafana/pkg/services/secrets/database"
 	secretsManager "github.com/grafana/grafana/pkg/services/secrets/manager"
 	"github.com/grafana/grafana/pkg/setting"
 	"github.com/grafana/grafana/pkg/tests/testsuite"
+	"github.com/grafana/grafana/pkg/util/testutil"
 )
 
 func TestMain(m *testing.M) {
 	testsuite.Run(m)
 }
 
-func TestDashboardSnapshotsService(t *testing.T) {
+func TestIntegrationDashboardSnapshotsService(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	sqlStore := db.InitTestDB(t)
 	cfg := setting.NewCfg()
 	dsStore := dashsnapdb.ProvideStore(sqlStore, cfg)
+	fakeDashboardService := &dashboards.FakeDashboardService{}
 	secretsService := secretsManager.SetupTestService(t, database.ProvideSecretsStore(sqlStore))
-	s := ProvideService(dsStore, secretsService)
+	s := ProvideService(dsStore, secretsService, fakeDashboardService)
 
 	origSecret := cfg.SecretKey
 	cfg.SecretKey = "dashboard_snapshot_service_test"
@@ -61,7 +66,6 @@ func TestDashboardSnapshotsService(t *testing.T) {
 
 		require.Equal(t, rawDashboard, decrypted)
 	})
-
 	t.Run("get dashboard snapshot should return the dashboard decrypted", func(t *testing.T) {
 		ctx := context.Background()
 

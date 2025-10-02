@@ -1,14 +1,15 @@
 import { css } from '@emotion/css';
-import React, { useState } from 'react';
+import { useState } from 'react';
 
+import { AlertLabels } from '@grafana/alerting/unstable';
 import { GrafanaTheme2 } from '@grafana/data';
-import { useStyles2, Stack } from '@grafana/ui';
-import { AlertmanagerGroup, AlertState } from 'app/plugins/datasource/alertmanager/types';
+import { Trans } from '@grafana/i18n';
+import { Stack, TextLink, useStyles2 } from '@grafana/ui';
+import { AlertmanagerGroup } from 'app/plugins/datasource/alertmanager/types';
 
-import { AlertLabels } from '../AlertLabels';
+import { createContactPointSearchLink } from '../../utils/misc';
 import { CollapseToggle } from '../CollapseToggle';
 import { MetaText } from '../MetaText';
-import { Strong } from '../Strong';
 
 import { AlertGroupAlertsTable } from './AlertGroupAlertsTable';
 import { AlertGroupHeader } from './AlertGroupHeader';
@@ -21,8 +22,11 @@ interface Props {
 export const AlertGroup = ({ alertManagerSourceName, group }: Props) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(true);
   const styles = useStyles2(getStyles);
+
   // When group is grouped, receiver.name is 'NONE' as it can contain multiple receivers
   const receiverInGroup = group.receiver.name !== 'NONE';
+  const contactPoint = group.receiver.name;
+
   return (
     <div className={styles.wrapper}>
       <div className={styles.header}>
@@ -36,14 +40,27 @@ export const AlertGroup = ({ alertManagerSourceName, group }: Props) => {
           {Object.keys(group.labels).length ? (
             <Stack direction="row" alignItems="center">
               <AlertLabels labels={group.labels} size="sm" />
+
               {receiverInGroup && (
                 <MetaText icon="at">
-                  Delivered to <Strong>{group.receiver.name}</Strong>
+                  <Trans i18nKey="alerting.alert-group.delivered-to" values={{ name: group.receiver.name }}>
+                    Delivered to{' '}
+                    <TextLink
+                      href={createContactPointSearchLink(contactPoint, alertManagerSourceName)}
+                      variant="bodySmall"
+                      color="primary"
+                      inline={false}
+                    >
+                      {'{{name}}'}
+                    </TextLink>
+                  </Trans>
                 </MetaText>
               )}
             </Stack>
           ) : (
-            <span>No grouping</span>
+            <span>
+              <Trans i18nKey="alerting.alert-group.no-grouping">No grouping</Trans>
+            </span>
           )}
         </div>
         <AlertGroupHeader group={group} />
@@ -65,7 +82,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: `${theme.spacing(1)} ${theme.spacing(1)} ${theme.spacing(1)} 0`,
+    padding: theme.spacing(1),
     backgroundColor: theme.colors.background.secondary,
     width: '100%',
   }),
@@ -73,15 +90,5 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: 'flex',
     flexDirection: 'row',
     alignItems: 'center',
-  }),
-  summary: css({}),
-  [AlertState.Active]: css({
-    color: theme.colors.error.main,
-  }),
-  [AlertState.Suppressed]: css({
-    color: theme.colors.primary.main,
-  }),
-  [AlertState.Unprocessed]: css({
-    color: theme.colors.secondary.main,
   }),
 });

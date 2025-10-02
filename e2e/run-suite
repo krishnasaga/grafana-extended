@@ -26,7 +26,9 @@ declare -A env=(
 )
 
 testFilesForSingleSuite="*.spec.ts"
-rootForEnterpriseSuite="./e2e/extensions-suite"
+rootForEnterpriseSuite="./e2e/extensions"
+rootForOldArch="./e2e/old-arch"
+rootForSearchDashboards="./e2e/dashboards-search-suite"
 
 declare -A cypressConfig=(
   [screenshotsFolder]=./e2e/"${args[0]}"/screenshots
@@ -41,6 +43,7 @@ declare -A cypressConfig=(
   [trashAssetsBeforeRuns]=false
   [reporter]=./e2e/log-reporter.js
   [baseUrl]=${BASE_URL:-"http://$HOST:$PORT"}
+  [video]=${CYPRESS_VIDEO:-false}
 )
 
 case "$1" in
@@ -53,6 +56,7 @@ case "$1" in
         echo "Dev mode"
         CMD="cypress open"
         ;;
+
     "benchmark")
         echo "Benchmark"
         PARAMS="--headed --no-runner-ui"
@@ -64,8 +68,7 @@ case "$1" in
         ;;
     "enterprise")
         echo "Enterprise"
-        CLEANUP="rm -rf ./e2e/extensions-suite"
-        SETUP="cp -Lr ./e2e/extensions ./e2e/extensions-suite"
+        env[SMTP_PLUGIN_ENABLED]=true
         enterpriseSuite=$(basename "${args[1]}")
         case "$2" in
             "debug")
@@ -81,10 +84,56 @@ case "$1" in
                 ;;
         esac
         cypressConfig[specPattern]=$rootForEnterpriseSuite/$enterpriseSuite/*-suite/*.spec.ts
-        $CLEANUP && $SETUP
         ;;
     "")
         ;;
+   "old-arch")
+      env[dashboardScene]=false
+      cypressConfig[specPattern]=$rootForOldArch/*/$testFilesForSingleSuite
+      cypressConfig[video]=false
+        case "$2" in
+            "debug")
+                echo -e "Debug mode"
+                env[SLOWMO]=1
+                PARAMS="--no-exit"
+                enterpriseSuite=$(basename "${args[2]}")
+                ;;
+            "dev")
+                echo "Dev mode"
+                CMD="cypress open"
+                enterpriseSuite=$(basename "${args[2]}")
+                ;;
+        esac
+      ;;
+    "old-arch/"*)
+      cypressConfig[specPattern]=./e2e/"${args[0]}"/$testFilesForSingleSuite
+      cypressConfig[video]=${args[1]}
+      env[dashboardScene]=false
+      ;;
+    "dashboards-search")
+      env[kubernetesDashboards]=true
+      cypressConfig[specPattern]=$rootForSearchDashboards/$testFilesForSingleSuite
+      cypressConfig[video]=false
+          case "$2" in
+            "debug")
+                echo -e "Debug mode"
+                env[SLOWMO]=1
+                PARAMS="--no-exit"
+                enterpriseSuite=$(basename "${args[2]}")
+                ;;
+            "dev")
+                echo "Dev mode"
+                CMD="cypress open"
+                enterpriseSuite=$(basename "${args[2]}")
+                ;;
+          esac
+      ;;
+   "enterprise-smtp")
+      env[SMTP_PLUGIN_ENABLED]=true
+      cypressConfig[specPattern]=./e2e/extensions/enterprise/smtp-suite/$testFilesForSingleSuite
+      cypressConfig[video]=${args[1]}
+      ;;
+
     *)
         cypressConfig[specPattern]=./e2e/"${args[0]}"/$testFilesForSingleSuite
         cypressConfig[video]=${args[1]}

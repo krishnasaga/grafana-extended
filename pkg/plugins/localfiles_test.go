@@ -33,7 +33,7 @@ func TestLocalFS_Remove(t *testing.T) {
 
 	t.Run("Uninstall will search in nested dist folder for plugin.json", func(t *testing.T) {
 		pluginDistDir := filepath.Join(t.TempDir(), "dist")
-		err = os.Mkdir(pluginDistDir, os.ModePerm)
+		err = os.Mkdir(pluginDistDir, 0o750)
 		require.NoError(t, err)
 		pluginJSON = filepath.Join(pluginDistDir, "plugin.json")
 		//nolint:gosec
@@ -59,7 +59,7 @@ func TestLocalFS_Remove(t *testing.T) {
 
 	t.Run("Uninstall will not delete folder if cannot recognize plugin structure", func(t *testing.T) {
 		pluginDir = filepath.Join(t.TempDir(), "system32")
-		err = os.Mkdir(pluginDir, os.ModePerm)
+		err = os.Mkdir(pluginDir, 0o750)
 		require.NoError(t, err)
 		testFile := filepath.Join(pluginDir, "important.exe")
 		//nolint:gosec
@@ -270,11 +270,26 @@ func TestStaticFS(t *testing.T) {
 			require.Equal(t, []string{allowedFn, deniedFn}, files)
 		})
 
-		t.Run("staticfs filters underelying fs's files", func(t *testing.T) {
+		t.Run("staticfs filters underlying fs's files", func(t *testing.T) {
 			files, err := staticFS.Files()
 			require.NoError(t, err)
 			require.Equal(t, []string{allowedFn}, files)
 		})
+	})
+
+	t.Run("FSRemover interface implementation verification", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		lfs := NewLocalFS(tmpDir)
+		var localFSInterface FS = lfs
+		_, isRemover := localFSInterface.(FSRemover)
+		require.True(t, isRemover)
+
+		sfs, err := NewStaticFS(localFS)
+		require.NoError(t, err)
+		var staticFSInterface FS = sfs
+		_, isRemover = staticFSInterface.(FSRemover)
+		require.True(t, isRemover)
 	})
 }
 

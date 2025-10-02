@@ -1,10 +1,10 @@
-import { Meta, Story } from '@storybook/react';
-import React, { useEffect, useState } from 'react';
+import { Meta, StoryFn } from '@storybook/react';
+import { useEffect, useState } from 'react';
 
 import { VizLayout } from './VizLayout';
 
 const meta: Meta = {
-  title: 'Visualizations/VizLayout',
+  title: 'Plugins/VizLayout',
   component: VizLayout,
   parameters: {
     docs: {},
@@ -25,7 +25,7 @@ const createArray = (legendItems: number) => {
   return newArray;
 };
 
-export const BottomLegend: Story = ({ height, width, legendItems }) => {
+export const BottomLegend: StoryFn = ({ height, width, legendItems }) => {
   const [items, setItems] = useState(createArray(legendItems));
   useEffect(() => {
     setItems(createArray(legendItems));
@@ -34,7 +34,10 @@ export const BottomLegend: Story = ({ height, width, legendItems }) => {
   const legend = (
     <VizLayout.Legend placement="bottom" maxHeight="30%">
       {items.map((_, index) => (
-        <div style={{ height: '30px', width: '100%', background: 'blue', marginBottom: '2px' }} key={index}>
+        <div
+          style={{ height: '30px', width: '100%', background: 'lightblue', color: 'black', marginBottom: '2px' }}
+          key={index}
+        >
           Legend item {index}
         </div>
       ))}
@@ -55,7 +58,7 @@ BottomLegend.args = {
   legendItems: 2,
 };
 
-export const RightLegend: Story = ({ height, width, legendItems, legendWidth }) => {
+export const RightLegend: StoryFn = ({ height, width, legendItems, legendWidth }) => {
   const [items, setItems] = useState(createArray(legendItems));
   useEffect(() => {
     setItems(createArray(legendItems));
@@ -64,7 +67,16 @@ export const RightLegend: Story = ({ height, width, legendItems, legendWidth }) 
   const legend = (
     <VizLayout.Legend placement="right" maxWidth="50%">
       {items.map((_, index) => (
-        <div style={{ height: '30px', width: `${legendWidth}px`, background: 'blue', marginBottom: '2px' }} key={index}>
+        <div
+          style={{
+            height: '30px',
+            width: `${legendWidth}px`,
+            background: 'lightblue',
+            color: 'black',
+            marginBottom: '2px',
+          }}
+          key={index}
+        >
           Legend item {index}
         </div>
       ))}

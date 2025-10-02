@@ -1,12 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import React from 'react';
 import { Provider } from 'react-redux';
 
 import { DataSourceApi } from '@grafana/data';
 import { DataSourceSrv, setDataSourceSrv } from '@grafana/runtime';
 import { DataQuery } from '@grafana/schema';
 import { configureStore } from 'app/store/configureStore';
-import { ExploreState } from 'app/types';
+import { ExploreState } from 'app/types/explore';
 
 import { UserState } from '../profile/state/reducers';
 
@@ -51,10 +50,10 @@ function setup(queries: DataQuery[]) {
 
   const leftState = makeExplorePaneState();
   const initialState: ExploreState = {
+    richHistory: [],
     panes: {
       left: {
         ...leftState,
-        richHistory: [],
         datasourceInstance: datasources['someDs-uid'],
         queries,
         correlations: [],
@@ -79,7 +78,7 @@ describe('Explore QueryRows', () => {
 
     render(
       <Provider store={store}>
-        <QueryRows exploreId={'left'} />
+        <QueryRows exploreId={'left'} changeCompactMode={jest.fn()} />
       </Provider>
     );
 

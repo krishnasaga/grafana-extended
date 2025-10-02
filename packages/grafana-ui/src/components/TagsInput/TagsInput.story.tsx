@@ -1,14 +1,13 @@
 import { Meta, StoryFn } from '@storybook/react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 import { StoryExample } from '../../utils/storybook/StoryExample';
-import { VerticalGroup } from '../Layout/Layout';
 
 import { TagsInput } from './TagsInput';
 import mdx from './TagsInput.mdx';
 
 const meta: Meta<typeof TagsInput> = {
-  title: 'Forms/TagsInput',
+  title: 'Inputs/TagsInput',
   component: TagsInput,
   parameters: {
     docs: {
@@ -28,11 +27,9 @@ export const Basic: StoryFn<typeof TagsInput> = (props) => {
 export const WithManyTags = () => {
   const [tags, setTags] = useState<string[]>(['dashboard', 'prod', 'server', 'frontend', 'game', 'kubernetes']);
   return (
-    <VerticalGroup>
-      <StoryExample name="With many tags">
-        <TagsInput tags={tags} onChange={setTags} />
-      </StoryExample>
-    </VerticalGroup>
+    <StoryExample name="With many tags">
+      <TagsInput tags={tags} onChange={setTags} />
+    </StoryExample>
   );
 };
 

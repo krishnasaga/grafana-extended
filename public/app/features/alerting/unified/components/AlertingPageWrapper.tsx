@@ -1,10 +1,9 @@
-import React, { PropsWithChildren } from 'react';
+import { PropsWithChildren, ReactNode } from 'react';
 import { useLocation } from 'react-use';
 
 import { Page } from 'app/core/components/Page/Page';
 import { PageProps } from 'app/core/components/Page/types';
 
-import { UAPreviewNotice } from '../../components/UAPreviewNotice';
 import { AlertmanagerProvider, useAlertmanager } from '../state/AlertmanagerContext';
 
 import { AlertManagerPicker } from './AlertManagerPicker';
@@ -12,19 +11,18 @@ import { NoAlertManagerWarning } from './NoAlertManagerWarning';
 
 /**
  * This is the main alerting page wrapper, used by the alertmanager page wrapper and the alert rules list view
+ *
+ * NOTE: we're omitting "title" here because it's not actually rendering the title (it's the html attribute "title").
+ * Use "renderTitle" instead for custom page titles.
  */
-interface AlertingPageWrapperProps extends PageProps {
+type AlertingPageWrapperProps = Omit<PageProps, 'children' | 'title'> & {
   isLoading?: boolean;
-}
+  children?: ReactNode;
+};
 
 export const AlertingPageWrapper = ({ children, isLoading, ...rest }: AlertingPageWrapperProps) => (
   <Page {...rest}>
-    <Page.Contents isLoading={isLoading}>
-      <div>
-        <UAPreviewNotice />
-        {children}
-      </div>
-    </Page.Contents>
+    <Page.Contents isLoading={isLoading}>{children}</Page.Contents>
   </Page>
 );
 

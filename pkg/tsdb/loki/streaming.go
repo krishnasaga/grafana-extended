@@ -16,6 +16,12 @@ import (
 )
 
 func (s *Service) SubscribeStream(ctx context.Context, req *backend.SubscribeStreamRequest) (*backend.SubscribeStreamResponse, error) {
+	if !isFeatureEnabled(ctx, flagLokiExperimentalStreaming) {
+		return &backend.SubscribeStreamResponse{
+			Status: backend.SubscribeStreamStatusPermissionDenied,
+		}, fmt.Errorf("streaming is not supported")
+	}
+
 	dsInfo, err := s.getDSInfo(ctx, req.PluginContext)
 	if err != nil {
 		return &backend.SubscribeStreamResponse{
@@ -73,7 +79,7 @@ func (s *Service) RunStream(ctx context.Context, req *backend.RunStreamRequest, 
 		return fmt.Errorf("missing expr in cuannel")
 	}
 
-	logger := logger.FromContext(ctx)
+	logger := s.logger.FromContext(ctx)
 	count := int64(0)
 
 	interrupt := make(chan os.Signal, 1)
@@ -149,7 +155,7 @@ func (s *Service) RunStream(ctx context.Context, req *backend.RunStreamRequest, 
 		}
 	}()
 
-	ticker := time.NewTicker(time.Second * 60) //.Step)
+	ticker := time.NewTicker(time.Second * 60) // .Step)
 	defer ticker.Stop()
 
 	for {

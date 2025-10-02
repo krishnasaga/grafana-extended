@@ -1,4 +1,4 @@
-import Mousetrap from 'mousetrap';
+import { mousetrap } from './mousetrap';
 
 export interface KeyBindingItem {
   /** Key or key pattern like mod+o */
@@ -16,7 +16,7 @@ export class KeybindingSet {
   private _binds: KeyBindingItem[] = [];
 
   addBinding(item: KeyBindingItem) {
-    Mousetrap.bind(
+    mousetrap.bind(
       item.key,
       (evt) => {
         evt.preventDefault();
@@ -24,14 +24,17 @@ export class KeybindingSet {
         evt.returnValue = false;
         item.onTrigger();
       },
-      'keydown'
+      item.type ?? 'keydown'
     );
-    this._binds.push(item);
+    this._binds.push({
+      ...item,
+      type: item.type ?? 'keydown',
+    });
   }
 
   removeAll() {
     this._binds.forEach((item) => {
-      Mousetrap.unbind(item.key, item.type);
+      mousetrap.unbind(item.key, item.type);
     });
     this._binds = [];
   }

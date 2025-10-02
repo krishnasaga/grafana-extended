@@ -1,11 +1,11 @@
 import { css } from '@emotion/css';
-import React from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
+import { Trans } from '@grafana/i18n';
 import { Icon, Tooltip, useStyles2 } from '@grafana/ui';
 import { Rule } from 'app/types/unified-alerting';
 
-import { isErrorHealth } from '../rule-viewer/v2/RuleViewer.v2';
+import { isErrorHealth } from '../rule-viewer/RuleViewer';
 
 interface Prom {
   rule: Rule;
@@ -19,7 +19,9 @@ export const RuleHealth = ({ rule }: Prom) => {
       <Tooltip theme="error" content={rule.lastError || 'No error message provided.'}>
         <div className={style.warn}>
           <Icon name="exclamation-triangle" />
-          <span>error</span>
+          <span>
+            <Trans i18nKey="alerting.rule-health.error">error</Trans>
+          </span>
         </div>
       </Tooltip>
     );
@@ -29,12 +31,12 @@ export const RuleHealth = ({ rule }: Prom) => {
 };
 
 const getStyle = (theme: GrafanaTheme2) => ({
-  warn: css`
-    display: inline-flex;
-    flex-direction: row;
-    align-items: center;
-    gap: ${theme.spacing(1)};
+  warn: css({
+    display: 'inline-flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing(1),
 
-    color: ${theme.colors.warning.text};
-  `,
+    color: theme.colors.warning.text,
+  }),
 });

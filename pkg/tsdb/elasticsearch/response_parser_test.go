@@ -9,13 +9,12 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/grafana/grafana-plugin-sdk-go/experimental"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/infra/tracing"
 	es "github.com/grafana/grafana/pkg/tsdb/elasticsearch/client"
 )
 
@@ -47,6 +46,7 @@ func TestProcessLogsResponse(t *testing.T) {
 					  {
 						"aggregations": {},
 						"hits": {
+						  "total": { "value": 2 },
 						  "hits": [
 							{
 							  "_id": "fdsfs",
@@ -108,7 +108,7 @@ func TestProcessLogsResponse(t *testing.T) {
 			logsFrame := frames[0]
 
 			meta := logsFrame.Meta
-			require.Equal(t, map[string]any{"searchWords": []string{"hello", "message"}, "limit": 500}, meta.Custom)
+			require.Equal(t, map[string]any{"searchWords": []string{"hello", "message"}, "limit": 500, "total": 2}, meta.Custom)
 			require.Equal(t, data.VisTypeLogs, string(meta.PreferredVisualization))
 
 			logsFieldMap := make(map[string]*data.Field)
@@ -330,7 +330,7 @@ func TestProcessLogsResponse(t *testing.T) {
   			]
 			}`
 
-		result, err := parseTestResponse(targets, response)
+		result, err := parseTestResponse(targets, response, false)
 		require.NoError(t, err)
 		require.Len(t, result.Responses, 1)
 
@@ -417,7 +417,7 @@ func TestProcessLogsResponse(t *testing.T) {
   			]
 			}`
 
-		result, err := parseTestResponse(targets, response)
+		result, err := parseTestResponse(targets, response, false)
 		require.NoError(t, err)
 		require.Len(t, result.Responses, 1)
 
@@ -432,6 +432,7 @@ func TestProcessLogsResponse(t *testing.T) {
 		require.Equal(t, map[string]any{
 			"searchWords": []string{"hello", "message"},
 			"limit":       500,
+			"total":       109,
 		}, customMeta)
 	})
 }
@@ -525,7 +526,7 @@ func TestProcessRawDataResponse(t *testing.T) {
   			]
 			}`
 
-		result, err := parseTestResponse(targets, response)
+		result, err := parseTestResponse(targets, response, false)
 		require.NoError(t, err)
 		require.Len(t, result.Responses, 1)
 
@@ -704,7 +705,7 @@ func TestProcessRawDocumentResponse(t *testing.T) {
 		"responses": [
 			{
 			"hits": {
-				"total": 100,
+				"total": { "value": 100 },
 				"hits": [
 				{
 					"_id": "1",
@@ -814,7 +815,7 @@ func TestProcessRawDocumentResponse(t *testing.T) {
   			]
 			}`
 
-		result, err := parseTestResponse(targets, response)
+		result, err := parseTestResponse(targets, response, false)
 		require.NoError(t, err)
 		require.Len(t, result.Responses, 1)
 
@@ -995,7 +996,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -1097,7 +1098,7 @@ func TestProcessBuckets(t *testing.T) {
          }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -1160,7 +1161,7 @@ func TestProcessBuckets(t *testing.T) {
 					}
 				]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -1233,7 +1234,7 @@ func TestProcessBuckets(t *testing.T) {
 			}]
 		}`
 
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			assert.Nil(t, err)
 			assert.Len(t, result.Responses, 1)
 			frames := result.Responses["A"].Frames
@@ -1464,7 +1465,7 @@ func TestProcessBuckets(t *testing.T) {
 				}
 			}]
 		}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			assert.Nil(t, err)
 			assert.Len(t, result.Responses, 1)
 
@@ -1551,7 +1552,7 @@ func TestProcessBuckets(t *testing.T) {
 			}]
 		}`
 
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			assert.Nil(t, err)
 			assert.Len(t, result.Responses, 1)
 			frames := result.Responses["A"].Frames
@@ -1749,7 +1750,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 
 			queryRes := result.Responses["A"]
@@ -1773,6 +1774,70 @@ func TestProcessBuckets(t *testing.T) {
 			require.Equal(t, frame.Fields[1].Name, data.TimeSeriesValueFieldName)
 			require.Equal(t, frame.Fields[1].Len(), 2)
 			assert.Equal(t, frame.Name, "server2")
+		})
+
+		t.Run("Single group by query one metric with true keepLabelsInResponse", func(t *testing.T) {
+			targets := map[string]string{
+				"A": `{
+					"metrics": [{ "type": "count", "id": "1" }],
+          "bucketAggs": [
+						{ "type": "terms", "field": "host", "id": "2" },
+						{ "type": "date_histogram", "field": "@timestamp", "id": "3" }
+					]
+				}`,
+			}
+			response := `{
+        "responses": [
+          {
+            "aggregations": {
+              "2": {
+                "buckets": [
+                  {
+                    "3": {
+                      "buckets": [{ "doc_count": 1, "key": 1000 }, { "doc_count": 3, "key": 2000 }]
+                    },
+                    "doc_count": 4,
+                    "key": "server1"
+                  },
+                  {
+                    "3": {
+                      "buckets": [{ "doc_count": 2, "key": 1000 }, { "doc_count": 8, "key": 2000 }]
+                    },
+                    "doc_count": 10,
+                    "key": "server2"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+			}`
+			result, err := parseTestResponse(targets, response, true)
+			require.NoError(t, err)
+
+			queryRes := result.Responses["A"]
+			require.NotNil(t, queryRes)
+			dataframes := queryRes.Frames
+			require.NoError(t, err)
+			require.Len(t, dataframes, 2)
+
+			frame := dataframes[0]
+			require.Len(t, frame.Fields, 2)
+			require.Equal(t, frame.Fields[0].Name, data.TimeSeriesTimeFieldName)
+			require.Equal(t, frame.Fields[0].Len(), 2)
+			require.Equal(t, frame.Fields[1].Name, data.TimeSeriesValueFieldName)
+			require.Equal(t, frame.Fields[1].Len(), 2)
+			require.Equal(t, frame.Fields[1].Labels, data.Labels{"host": "server1"})
+			assert.Equal(t, frame.Fields[1].Config.DisplayNameFromDS, "server1")
+
+			frame = dataframes[1]
+			require.Len(t, frame.Fields, 2)
+			require.Equal(t, frame.Fields[0].Name, data.TimeSeriesTimeFieldName)
+			require.Equal(t, frame.Fields[0].Len(), 2)
+			require.Equal(t, frame.Fields[1].Name, data.TimeSeriesValueFieldName)
+			require.Equal(t, frame.Fields[1].Len(), 2)
+			require.Equal(t, frame.Fields[1].Labels, data.Labels{"host": "server2"})
+			assert.Equal(t, frame.Fields[1].Config.DisplayNameFromDS, "server2")
 		})
 
 		t.Run("Single group by query two metrics", func(t *testing.T) {
@@ -1817,7 +1882,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -1969,7 +2034,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2142,7 +2207,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2274,7 +2339,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2322,7 +2387,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2384,7 +2449,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2506,7 +2571,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2609,7 +2674,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2659,7 +2724,7 @@ func TestProcessBuckets(t *testing.T) {
          }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2721,7 +2786,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2789,7 +2854,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -2853,7 +2918,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
@@ -2907,7 +2972,7 @@ func TestProcessBuckets(t *testing.T) {
           }
         ]
 			}`
-			result, err := parseTestResponse(targets, response)
+			result, err := parseTestResponse(targets, response, false)
 			require.NoError(t, err)
 			require.Len(t, result.Responses, 1)
 
@@ -3176,7 +3241,7 @@ func TestParseResponse(t *testing.T) {
 				  },
 				  {
 					"hits": {
-					  "total": 2,
+					  "total": { "value": 2 },
 					  "hits": [
 						{
 						  "_id": "5",
@@ -3583,7 +3648,7 @@ func TestTrimEdges(t *testing.T) {
 	requireFrameLength(t, frames[0], 1)
 }
 
-func parseTestResponse(tsdbQueries map[string]string, responseBody string) (*backend.QueryDataResponse, error) {
+func parseTestResponse(tsdbQueries map[string]string, responseBody string, keepLabelsInResponse bool) (*backend.QueryDataResponse, error) {
 	from := time.Date(2018, 5, 15, 17, 50, 0, 0, time.UTC)
 	to := time.Date(2018, 5, 15, 17, 55, 0, 0, time.UTC)
 	configuredFields := es.ConfiguredFields{
@@ -3613,12 +3678,12 @@ func parseTestResponse(tsdbQueries map[string]string, responseBody string) (*bac
 		return nil, err
 	}
 
-	queries, err := parseQuery(tsdbQuery.Queries, log.New("test.logger"))
+	queries, err := parseQuery(tsdbQuery.Queries, log.New())
 	if err != nil {
 		return nil, err
 	}
 
-	return parseResponse(context.Background(), response.Responses, queries, configuredFields, log.New("test.logger"), tracing.InitializeTracerForTest())
+	return parseResponse(context.Background(), response.Responses, queries, configuredFields, keepLabelsInResponse, log.New())
 }
 
 func requireTimeValue(t *testing.T, expected int64, frame *data.Frame, index int) {

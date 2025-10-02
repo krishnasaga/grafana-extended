@@ -1,17 +1,15 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import React from 'react';
 
 import { locationService, reportInteraction } from '@grafana/runtime';
 import { defaultDashboard } from '@grafana/schema';
-import config from 'app/core/config';
 
 import { createDashboardModelFixture } from '../state/__fixtures__/dashboardFixtures';
 import { onCreateNewPanel, onImportDashboard, onAddLibraryPanel } from '../utils/dashboard';
 
 import DashboardEmpty, { Props } from './DashboardEmpty';
 
-jest.mock('app/types', () => ({
-  ...jest.requireActual('app/types'),
+jest.mock('app/types/store', () => ({
+  ...jest.requireActual('app/types/store'),
   useDispatch: () => jest.fn(),
   useSelector: () => jest.fn(),
 }));
@@ -30,6 +28,18 @@ jest.mock('app/features/dashboard/utils/dashboard', () => ({
   onAddLibraryPanel: jest.fn(),
 }));
 
+jest.mock('app/features/provisioning/hooks/useGetResourceRepositoryView', () => ({
+  useGetResourceRepositoryView: jest.fn(() => ({
+    isReadOnlyRepo: false,
+    isInstanceManaged: false,
+    isLoading: false,
+  })),
+}));
+
+const mockUseGetResourceRepositoryView = jest.mocked(
+  require('app/features/provisioning/hooks/useGetResourceRepositoryView').useGetResourceRepositoryView
+);
+
 function setup(options?: Partial<Props>) {
   const props = {
     dashboard: createDashboardModelFixture(defaultDashboard),
@@ -41,8 +51,13 @@ function setup(options?: Partial<Props>) {
 }
 
 beforeEach(() => {
-  config.featureToggles = { vizAndWidgetSplit: false };
   jest.clearAllMocks();
+  // Reset the mock to default state
+  mockUseGetResourceRepositoryView.mockReturnValue({
+    isReadOnlyRepo: false,
+    isInstanceManaged: false,
+    isLoading: false,
+  });
 });
 
 it('renders page with correct title for an empty dashboard', () => {
@@ -74,8 +89,12 @@ it('creates new visualization when clicked Add visualization', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add visualization' }));
   });
 
-  expect(reportInteraction).toHaveBeenCalledWith('dashboards_emptydashboard_clicked', { item: 'add_visualization' });
+  expect(reportInteraction).toHaveBeenCalledWith('dashboards_emptydashboard_clicked', {
+    item: 'add_visualization',
+    isDynamicDashboard: false,
+  });
   expect(locationService.partial).toHaveBeenCalled();
+  expect(locationService.partial).toHaveBeenCalledWith({ editPanel: undefined, firstPanel: true });
   expect(onCreateNewPanel).toHaveBeenCalled();
 });
 
@@ -86,7 +105,10 @@ it('open import dashboard when clicked Import dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Import dashboard' }));
   });
 
-  expect(reportInteraction).toHaveBeenCalledWith('dashboards_emptydashboard_clicked', { item: 'import_dashboard' });
+  expect(reportInteraction).toHaveBeenCalledWith('dashboards_emptydashboard_clicked', {
+    item: 'import_dashboard',
+    isDynamicDashboard: false,
+  });
   expect(onImportDashboard).toHaveBeenCalled();
 });
 
@@ -97,7 +119,10 @@ it('adds a library panel when clicked Add library panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add library panel' }));
   });
 
-  expect(reportInteraction).toHaveBeenCalledWith('dashboards_emptydashboard_clicked', { item: 'import_from_library' });
+  expect(reportInteraction).toHaveBeenCalledWith('dashboards_emptydashboard_clicked', {
+    item: 'import_from_library',
+    isDynamicDashboard: false,
+  });
   expect(locationService.partial).not.toHaveBeenCalled();
   expect(onAddLibraryPanel).toHaveBeenCalled();
 });
@@ -111,12 +136,17 @@ it('renders page without Add Widget button when feature flag is disabled', () =>
   expect(screen.queryByRole('button', { name: 'Add widget' })).not.toBeInTheDocument();
 });
 
-it('renders page with Add Widget button when feature flag is enabled', () => {
-  config.featureToggles.vizAndWidgetSplit = true;
-  setup();
+it('renders with buttons disabled when repository is read-only', () => {
+  // Mock the hook to return read-only repository
+  mockUseGetResourceRepositoryView.mockReturnValue({
+    isReadOnlyRepo: true,
+    isInstanceManaged: false,
+    isLoading: false,
+  });
 
-  expect(screen.getByRole('button', { name: 'Add visualization' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Import dashboard' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Add library panel' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Add widget' })).toBeInTheDocument();
+  setup({ canCreate: true });
+
+  expect(screen.getByRole('button', { name: 'Add visualization' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Import dashboard' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Add library panel' })).toBeDisabled();
 });

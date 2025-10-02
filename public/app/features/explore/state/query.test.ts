@@ -18,17 +18,17 @@ import {
 import { DataQuery, DataSourceRef } from '@grafana/schema';
 import config from 'app/core/config';
 import { queryLogsSample, queryLogsVolume } from 'app/features/logs/logsModel';
-import { createAsyncThunk, ExploreItemState, StoreState, ThunkDispatch } from 'app/types';
+import { ExploreItemState } from 'app/types/explore';
+import { createAsyncThunk, StoreState, ThunkDispatch } from 'app/types/store';
 
 import { reducerTester } from '../../../../test/core/redux/reducerTester';
 import * as richHistory from '../../../core/utils/richHistory';
 import { configureStore } from '../../../store/configureStore';
 import { setTimeSrv, TimeSrv } from '../../dashboard/services/TimeSrv';
-import { makeLogs } from '../__mocks__/makeLogs';
+import { makeLogs } from '../mocks/makeLogs';
 import { supplementaryQueryTypes } from '../utils/supplementaryQueries';
 
 import { saveCorrelationsAction } from './explorePane';
-import { createDefaultInitialState } from './helpers';
 import {
   addQueryRowAction,
   addResultsToCache,
@@ -50,6 +50,7 @@ import {
   changeQueries,
 } from './query';
 import * as actions from './query';
+import { createDefaultInitialState } from './testHelpers';
 import { makeExplorePaneState } from './utils';
 
 jest.mock('app/features/logs/logsModel');
@@ -65,6 +66,9 @@ const datasources: DataSourceApi[] = [
     uid: 'ds1',
     getRef: () => {
       return { type: 'postgres', uid: 'ds1' };
+    },
+    filterQuery: (query: DataQuery) => {
+      return query.key === 'true';
     },
   } as DataSourceApi<DataQuery, DataSourceJsonData, {}>,
   {
@@ -227,6 +231,56 @@ describe('runQueries', () => {
     expect((richHistory.addToRichHistory as jest.Mock).mock.calls).toHaveLength(1);
     expect((richHistory.addToRichHistory as jest.Mock).mock.calls[0][0].localOverride).toBeTruthy();
   });
+
+  /* the next two tests are for ensuring the query datasource's filterQuery function stops queries
+    from being saved to rich history. We do that by setting a fake datasource in this test (datasources[0])
+    to filter queries off their key value
+
+    datasources[1] does not have filterQuery defined
+  */
+  it('with filterQuery defined, should not save filtered out queries to history', async () => {
+    const { dispatch } = configureStore({
+      ...defaultInitialState,
+      explore: {
+        panes: {
+          left: {
+            ...defaultInitialState.explore.panes.left,
+            datasourceInstance: datasources[0],
+            queries: [
+              { refId: 'A', key: 'false' },
+              { refId: 'B', key: 'true' },
+            ],
+          },
+        },
+      },
+    } as unknown as Partial<StoreState>);
+    jest.spyOn(richHistory, 'addToRichHistory');
+    await dispatch(runQueries({ exploreId: 'left' }));
+    const calls = (richHistory.addToRichHistory as jest.Mock).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0].queries).toHaveLength(1);
+    expect(calls[0][0].queries[0].refId).toEqual('B');
+  });
+
+  it('with filterQuery not defined, all queries are saved', async () => {
+    const { dispatch } = configureStore({
+      ...defaultInitialState,
+      explore: {
+        panes: {
+          left: {
+            ...defaultInitialState.explore.panes.left,
+            datasourceInstance: datasources[1],
+            queries: [{ refId: 'A' }, { refId: 'B' }],
+          },
+        },
+      },
+    } as unknown as Partial<StoreState>);
+    jest.spyOn(richHistory, 'addToRichHistory');
+    await dispatch(runQueries({ exploreId: 'left' }));
+    const calls = (richHistory.addToRichHistory as jest.Mock).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0].queries).toHaveLength(2);
+  });
 });
 
 describe('running queries', () => {
@@ -270,7 +324,7 @@ describe('running queries', () => {
       cleanSupplementaryQueryAction({ exploreId, type: SupplementaryQueryType.LogsSample }),
     ]);
   });
-  it('should cancel running query when a new query is issued', async () => {
+  it('should cancel running queries when a new query is issued', async () => {
     const initialState = {
       ...makeExplorePaneState(),
     };
@@ -279,6 +333,23 @@ describe('running queries', () => {
       .whenThunkIsDispatched({ exploreId });
 
     expect(dispatchedActions).toContainEqual(cancelQueriesAction({ exploreId }));
+  });
+  it('should not cancel running queries when scanning', async () => {
+    const initialState = {
+      ...makeExplorePaneState(),
+      explore: {
+        panes: {
+          [exploreId]: {
+            scanning: true,
+          },
+        },
+      },
+    };
+    const dispatchedActions = await thunkTester(initialState)
+      .givenThunk(runQueries)
+      .whenThunkIsDispatched({ exploreId });
+
+    expect(dispatchedActions).not.toContainEqual(cancelQueriesAction({ exploreId }));
   });
 });
 
@@ -349,6 +420,36 @@ describe('changeQueries', () => {
         })
       );
 
+      expect(actions.changeQueriesAction).toHaveBeenCalled();
+      expect(actions.importQueries).not.toHaveBeenCalled();
+    });
+
+    it('should not import queries when skipAutoImport is true', async () => {
+      jest.spyOn(actions, 'importQueries');
+      jest.spyOn(actions, 'changeQueriesAction');
+
+      const { dispatch } = configureStore({
+        ...defaultInitialState,
+        explore: {
+          panes: {
+            left: {
+              ...defaultInitialState.explore.panes.left,
+              datasourceInstance: datasources[0],
+              queries: [{ refId: 'A', datasource: datasources[0].getRef() }],
+            },
+          },
+        },
+      } as unknown as Partial<StoreState>);
+
+      await dispatch(
+        changeQueries({
+          queries: [{ refId: 'A', datasource: datasources[0].getRef(), queryType: 'someValue' }],
+          exploreId: 'left',
+          options: {
+            skipAutoImport: true,
+          },
+        })
+      );
       expect(actions.changeQueriesAction).toHaveBeenCalled();
       expect(actions.importQueries).not.toHaveBeenCalled();
     });

@@ -1,15 +1,19 @@
 import { css } from '@emotion/css';
-import React, { useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useEffect, useMemo } from 'react';
+import { useLocation } from 'react-router-dom-v5-compat';
 
 import { DataSourceSettings, GrafanaTheme2 } from '@grafana/data';
-import { config } from '@grafana/runtime';
-import { useStyles2 } from '@grafana/ui';
-import EmptyListCTA from 'app/core/components/EmptyListCTA/EmptyListCTA';
+import { Trans, t } from '@grafana/i18n';
+import { config, useFavoriteDatasources, FavoriteDatasources } from '@grafana/runtime';
+import { EmptyState, LinkButton, TextLink, useStyles2 } from '@grafana/ui';
 import { contextSrv } from 'app/core/core';
-import { StoreState, AccessControlAction, useSelector } from 'app/types';
+import { useQueryParams } from 'app/core/hooks/useQueryParams';
+import { AccessControlAction } from 'app/types/accessControl';
+import { StoreState, useSelector } from 'app/types/store';
 
-import { getDataSources, getDataSourcesCount, useDataSourcesRoutes, useLoadDataSources } from '../state';
+import { ROUTES } from '../../connections/constants';
+import { useLoadDataSources } from '../state/hooks';
+import { getDataSources, getDataSourcesCount } from '../state/selectors';
 import { trackDataSourcesListViewed } from '../tracking';
 
 import { DataSourcesListCard } from './DataSourcesListCard';
@@ -17,12 +21,18 @@ import { DataSourcesListHeader } from './DataSourcesListHeader';
 
 export function DataSourcesList() {
   const { isLoading } = useLoadDataSources();
+  const favoriteDataSources = useFavoriteDatasources();
+  const [queryParams, updateQueryParams] = useQueryParams();
+  const showFavoritesOnly = !!queryParams.starred;
+  const handleFavoritesCheckboxChange = (value: boolean) => {
+    updateQueryParams({ starred: value ? 'true' : undefined });
+  };
 
   const dataSources = useSelector((state) => getDataSources(state.dataSources));
   const dataSourcesCount = useSelector(({ dataSources }: StoreState) => getDataSourcesCount(dataSources));
   const hasCreateRights = contextSrv.hasPermission(AccessControlAction.DataSourcesCreate);
   const hasWriteRights = contextSrv.hasPermission(AccessControlAction.DataSourcesWrite);
-  const hasExploreRights = contextSrv.hasPermission(AccessControlAction.DataSourcesExplore);
+  const hasExploreRights = contextSrv.hasAccessToExplore();
 
   return (
     <DataSourcesListView
@@ -32,6 +42,9 @@ export function DataSourcesList() {
       hasCreateRights={hasCreateRights}
       hasWriteRights={hasWriteRights}
       hasExploreRights={hasExploreRights}
+      showFavoritesOnly={showFavoritesOnly}
+      handleFavoritesCheckboxChange={handleFavoritesCheckboxChange}
+      favoriteDataSources={favoriteDataSources}
     />
   );
 }
@@ -43,19 +56,40 @@ export type ViewProps = {
   hasCreateRights: boolean;
   hasWriteRights: boolean;
   hasExploreRights: boolean;
+  showFavoritesOnly?: boolean;
+  handleFavoritesCheckboxChange?: (value: boolean) => void;
+  favoriteDataSources?: FavoriteDatasources;
 };
 
 export function DataSourcesListView({
-  dataSources,
+  dataSources: allDataSources,
   dataSourcesCount,
   isLoading,
   hasCreateRights,
   hasWriteRights,
   hasExploreRights,
+  showFavoritesOnly,
+  handleFavoritesCheckboxChange,
+  favoriteDataSources,
 }: ViewProps) {
   const styles = useStyles2(getStyles);
-  const dataSourcesRoutes = useDataSourcesRoutes();
   const location = useLocation();
+  const favoritesCheckbox =
+    favoriteDataSources?.enabled && handleFavoritesCheckboxChange && showFavoritesOnly !== undefined
+      ? {
+          onChange: handleFavoritesCheckboxChange,
+          value: showFavoritesOnly,
+          label: t('datasources.list.starred', 'Starred'),
+        }
+      : undefined;
+
+  // Filter data sources based on favorites when enabled
+  const dataSources = useMemo(() => {
+    if (!showFavoritesOnly || !favoriteDataSources?.enabled) {
+      return allDataSources;
+    }
+    return allDataSources.filter((dataSource) => favoriteDataSources?.isFavoriteDatasource(dataSource.uid));
+  }, [allDataSources, showFavoritesOnly, favoriteDataSources]);
 
   useEffect(() => {
     trackDataSourcesListViewed({
@@ -66,17 +100,25 @@ export function DataSourcesListView({
 
   if (!isLoading && dataSourcesCount === 0) {
     return (
-      <EmptyListCTA
-        buttonDisabled={!hasCreateRights}
-        title="No data sources defined"
-        buttonIcon="database"
-        buttonLink={dataSourcesRoutes.New}
-        buttonTitle="Add data source"
-        proTip="You can also define data sources through configuration files."
-        proTipLink="http://docs.grafana.org/administration/provisioning/?utm_source=grafana_ds_list#data-sources"
-        proTipLinkTitle="Learn more"
-        proTipTarget="_blank"
-      />
+      <EmptyState
+        variant="call-to-action"
+        button={
+          <LinkButton disabled={!hasCreateRights} href={ROUTES.DataSourcesNew} icon="database" size="lg">
+            <Trans i18nKey="data-source-list.empty-state.button-title">Add data source</Trans>
+          </LinkButton>
+        }
+        message={t('data-source-list.empty-state.title', 'No data sources defined')}
+      >
+        <Trans i18nKey="data-source-list.empty-state.pro-tip">
+          You can also define data sources through configuration files.{' '}
+          <TextLink
+            external
+            href="http://docs.grafana.org/administration/provisioning/?utm_source=grafana_ds_list#data-sources"
+          >
+            Learn more
+          </TextLink>
+        </Trans>
+      </EmptyState>
     );
   }
 
@@ -101,10 +143,14 @@ export function DataSourcesListView({
   return (
     <>
       {/* List Header */}
-      <DataSourcesListHeader />
+      <DataSourcesListHeader filterCheckbox={favoritesCheckbox} />
 
       {/* List */}
-      <ul className={styles.list}>{getDataSourcesList()}</ul>
+      {dataSources.length === 0 && !isLoading ? (
+        <EmptyState variant="not-found" message={t('data-sources.empty-state.message', 'No data sources found')} />
+      ) : (
+        <ul className={styles.list}>{getDataSourcesList()}</ul>
+      )}
     </>
   );
 }

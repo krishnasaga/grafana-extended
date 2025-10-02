@@ -1,34 +1,42 @@
 import { css, keyframes } from '@emotion/css';
-import React from 'react';
+import { memo } from 'react';
 
-import { useStyles2 } from '../../themes';
+import { GrafanaTheme2 } from '@grafana/data';
 
-export const EllipsisAnimated = React.memo(() => {
+import { useStyles2 } from '../../themes/ThemeContext';
+
+export const EllipsisAnimated = memo(() => {
   const styles = useStyles2(getStyles);
   return (
     <div className={styles.ellipsis}>
-      <span className={styles.firstDot}>.</span>
-      <span className={styles.secondDot}>.</span>
-      <span className={styles.thirdDot}>.</span>
+      <span className={styles.firstDot}>{'.'}</span>
+      <span className={styles.secondDot}>{'.'}</span>
+      <span className={styles.thirdDot}>{'.'}</span>
     </div>
   );
 });
 
 EllipsisAnimated.displayName = 'EllipsisAnimated';
 
-const getStyles = () => {
+const getStyles = (theme: GrafanaTheme2) => {
   return {
     ellipsis: css({
       display: 'inline',
     }),
     firstDot: css({
-      animation: `${firstDot} 2s linear infinite`,
+      [theme.transitions.handleMotion('no-preference', 'reduce')]: {
+        animation: `${firstDot} 2s linear infinite`,
+      },
     }),
     secondDot: css({
-      animation: `${secondDot} 2s linear infinite`,
+      [theme.transitions.handleMotion('no-preference', 'reduce')]: {
+        animation: `${secondDot} 2s linear infinite`,
+      },
     }),
     thirdDot: css({
-      animation: `${thirdDot} 2s linear infinite`,
+      [theme.transitions.handleMotion('no-preference', 'reduce')]: {
+        animation: `${thirdDot} 2s linear infinite`,
+      },
     }),
   };
 };

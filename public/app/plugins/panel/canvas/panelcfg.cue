@@ -42,6 +42,8 @@ composableKinds: PanelCfg: {
 
 					width?:  float64
 					height?: float64
+
+					rotation?: float64
 				} @cuetsy(kind="interface")
 
 				BackgroundImageSize: "original" | "contain" | "cover" | "fill" | "tile" @cuetsy(kind="enum", memberNames="Original|Contain|Cover|Fill|Tile")
@@ -52,8 +54,9 @@ composableKinds: PanelCfg: {
 				} @cuetsy(kind="interface")
 
 				LineConfig: {
-					color?: ui.ColorDimensionConfig
-					width?: float64
+					color?:  ui.ColorDimensionConfig
+					width?:  float64
+					radius?: float64
 				} @cuetsy(kind="interface")
 
 				HttpRequestMethod: "GET" | "POST" | "PUT" @cuetsy(kind="enum", memberNames="GET|POST|PUT")
@@ -70,6 +73,10 @@ composableKinds: PanelCfg: {
 					path:        ConnectionPath
 					color?:      ui.ColorDimensionConfig
 					size?:       ui.ScaleDimensionConfig
+					direction?:  ui.DirectionDimensionConfig
+					vertices?: [...ConnectionCoordinates]
+					sourceOriginal?: ConnectionCoordinates
+					targetOriginal?: ConnectionCoordinates
 				} @cuetsy(kind="interface")
 				CanvasElementOptions: {
 					name: string
@@ -82,6 +89,10 @@ composableKinds: PanelCfg: {
 					border?:     LineConfig
 					connections?: [...CanvasConnection]
 				} @cuetsy(kind="interface")
+				CanvasTooltip: {
+				  mode: ui.TooltipDisplayMode
+				  disableForOneClick?: bool
+			  } @cuetsy(kind="interface")
 
 				Options: {
 					// Enable inline editing
@@ -90,6 +101,8 @@ composableKinds: PanelCfg: {
 					showAdvancedTypes: bool | *true
 					// Enable pan and zoom
 					panZoom: bool | *true
+					// Zoom to content
+					zoomToContent: bool | *true
 					// The root element of canvas (frame), where all canvas elements are nested
 					// TODO: Figure out how to define a default value for this
 					root: {
@@ -100,6 +113,8 @@ composableKinds: PanelCfg: {
 						// The list of canvas elements attached to the root element
 						elements: [...CanvasElementOptions]
 					} @cuetsy(kind="interface")
+					// Controls tooltip options
+					tooltip: CanvasTooltip
 				} @cuetsy(kind="interface")
 			}
 		}]

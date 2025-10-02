@@ -1,10 +1,11 @@
 import { map } from 'rxjs/operators';
 
 import { DataFrame, DataTransformerID, DataTransformerInfo, Field, getFieldDisplayName, Labels } from '@grafana/data';
+import { t } from '@grafana/i18n';
 
 import {
   EvaluatedMappingResult,
-  evaluteFieldMappings,
+  evaluateFieldMappings,
   FieldConfigHandlerKey,
   FieldToConfigMapping,
   getFieldConfigFromFrame,
@@ -16,10 +17,13 @@ export interface RowToFieldsTransformOptions {
   mappings?: FieldToConfigMapping[];
 }
 
-export const rowsToFieldsTransformer: DataTransformerInfo<RowToFieldsTransformOptions> = {
+export const getRowsToFieldsTransformer: () => DataTransformerInfo<RowToFieldsTransformOptions> = () => ({
   id: DataTransformerID.rowsToFields,
-  name: 'Rows to fields',
-  description: 'Convert each row into a field with dynamic config.',
+  name: t('transformers.get-rows-to-fields-transformer.name.rows-to-fields', 'Rows to fields'),
+  description: t(
+    'transformers.get-rows-to-fields-transformer.description.convert-field-dynamic-config',
+    'Convert each row into a field with dynamic config.'
+  ),
   defaultOptions: {},
 
   /**
@@ -32,10 +36,10 @@ export const rowsToFieldsTransformer: DataTransformerInfo<RowToFieldsTransformOp
         return data.map((frame) => rowsToFields(options, frame));
       })
     ),
-};
+});
 
 export function rowsToFields(options: RowToFieldsTransformOptions, data: DataFrame): DataFrame {
-  const mappingResult = evaluteFieldMappings(data, options.mappings ?? [], true);
+  const mappingResult = evaluateFieldMappings(data, options.mappings ?? [], true);
   const { nameField, valueField } = mappingResult;
 
   if (!nameField || !valueField) {
@@ -64,6 +68,7 @@ export function rowsToFields(options: RowToFieldsTransformOptions, data: DataFra
   return {
     fields: outFields,
     length: 1,
+    refId: `${DataTransformerID.rowsToFields}-${data.refId}`,
   };
 }
 

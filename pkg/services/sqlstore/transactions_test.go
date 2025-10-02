@@ -5,15 +5,15 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/grafana/grafana/pkg/util/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIntegrationReuseSessionWithTransaction(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-	ss := InitTestDB(t)
+	testutil.SkipIntegrationTestInShortMode(t)
+
+	ss, _ := InitTestDB(t)
 
 	t.Run("top level transaction", func(t *testing.T) {
 		var outerSession *DBSession
@@ -69,11 +69,9 @@ func TestIntegrationReuseSessionWithTransaction(t *testing.T) {
 }
 
 func TestIntegrationPublishAfterCommitWithNestedTransactions(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
+	testutil.SkipIntegrationTestInShortMode(t)
 
-	ss := InitTestDB(t)
+	ss, _ := InitTestDB(t)
 	ctx := context.Background()
 
 	// On X success

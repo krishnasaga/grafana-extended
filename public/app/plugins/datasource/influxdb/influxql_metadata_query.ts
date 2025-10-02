@@ -1,4 +1,4 @@
-import { ScopedVars } from '@grafana/data/src';
+import { ScopedVars } from '@grafana/data';
 import config from 'app/core/config';
 
 import InfluxDatasource from './datasource';
@@ -14,6 +14,7 @@ type MetadataQueryOptions = {
   tags?: InfluxQueryTag[];
   withKey?: string;
   withMeasurementFilter?: string;
+  withTimeFilter?: string;
 };
 
 const runExploreQuery = async (options: MetadataQueryOptions): Promise<Array<{ text: string }>> => {
@@ -26,6 +27,7 @@ const runExploreQuery = async (options: MetadataQueryOptions): Promise<Array<{ t
     tags,
     withKey,
     withMeasurementFilter,
+    withTimeFilter: datasource.showTagTime,
     templateService: datasource.templateSrv,
     database: datasource.database,
   });
@@ -40,7 +42,7 @@ const runExploreQuery = async (options: MetadataQueryOptions): Promise<Array<{ t
     return datasource.runMetadataQuery(target);
   } else {
     const options = { policy: target.policy };
-    return datasource.metricFindQuery(query, options);
+    return datasource.metricFindQuery({ refId: 'run-explore-query', query }, options);
   }
 };
 

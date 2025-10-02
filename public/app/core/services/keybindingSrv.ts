@@ -1,14 +1,11 @@
-import Mousetrap from 'mousetrap';
-
-import 'mousetrap-global-bind';
-import 'mousetrap/plugins/global-bind/mousetrap-global-bind';
-import { LegacyGraphHoverClearEvent, locationUtil } from '@grafana/data';
+import { LegacyGraphHoverClearEvent, SetPanelAttentionEvent, locationUtil } from '@grafana/data';
 import { LocationService } from '@grafana/runtime';
 import appEvents from 'app/core/app_events';
 import { getExploreUrl } from 'app/core/utils/explore';
+import { toggleMockApiAndReload, togglePseudoLocale } from 'app/dev-utils';
 import { SaveDashboardDrawer } from 'app/features/dashboard/components/SaveDashboard/SaveDashboardDrawer';
-import { ShareModal } from 'app/features/dashboard/components/ShareModal';
-import { DashboardModel } from 'app/features/dashboard/state';
+import { ShareModal } from 'app/features/dashboard/components/ShareModal/ShareModal';
+import { DashboardModel } from 'app/features/dashboard/state/DashboardModel';
 
 import { getTimeSrv } from '../../features/dashboard/services/TimeSrv';
 import {
@@ -26,21 +23,29 @@ import { HelpModal } from '../components/help/HelpModal';
 import { contextSrv } from '../core';
 import { RouteDescriptor } from '../navigation/types';
 
+import { mousetrap } from './mousetrap';
 import { toggleTheme } from './theme';
-import { withFocusedPanel } from './withFocusedPanelId';
 
 export class KeybindingSrv {
   constructor(
     private locationService: LocationService,
     private chromeService: AppChromeService
-  ) {}
+  ) {
+    // No cleanup needed, since KeybindingSrv is a singleton
+    appEvents.subscribe(SetPanelAttentionEvent, (event) => {
+      this.panelId = event.payload.panelId;
+    });
+  }
+  /** string for VizPanel key and number for panelId */
+  private panelId: string | number | null = null;
 
   clearAndInitGlobalBindings(route: RouteDescriptor) {
-    Mousetrap.reset();
+    mousetrap.reset();
 
     // Chromeless pages like login and signup page don't get any global bindings
     if (!route.chromeless) {
-      this.bind(['?', 'mod+h'], this.showHelpModal);
+      this.bind('?', this.showHelpModal);
+
       this.bind('g h', this.goToHome);
       this.bind('g d', this.goToDashboards);
       this.bind('g e', this.goToExplore);
@@ -52,6 +57,13 @@ export class KeybindingSrv {
 
     this.bind('c t', () => toggleTheme(false));
     this.bind('c r', () => toggleTheme(true));
+
+    if (process.env.NODE_ENV === 'development') {
+      // 'change mock'
+      this.bind('c m', () => toggleMockApiAndReload());
+      // 'change pseudo locale'
+      this.bind('c p l', () => togglePseudoLocale());
+    }
   }
 
   bindGlobalEsc() {
@@ -82,10 +94,6 @@ export class KeybindingSrv {
 
     // ok no focused input or editor that should block this, let exist!
     this.exit();
-  }
-
-  private closeSearch() {
-    this.locationService.partial({ search: null });
   }
 
   private openAlerting() {
@@ -139,10 +147,6 @@ export class KeybindingSrv {
     if (kioskMode) {
       this.chromeService.exitKioskMode();
     }
-
-    if (search.search) {
-      this.closeSearch();
-    }
   }
 
   private showDashEditView() {
@@ -152,7 +156,7 @@ export class KeybindingSrv {
   }
 
   bind(keyArg: string | string[], fn: () => void) {
-    Mousetrap.bind(
+    mousetrap.bind(
       keyArg,
       (evt) => {
         evt.preventDefault();
@@ -165,7 +169,7 @@ export class KeybindingSrv {
   }
 
   bindGlobal(keyArg: string, fn: () => void) {
-    Mousetrap.bindGlobal(
+    mousetrap.bindGlobal(
       keyArg,
       (evt) => {
         evt.preventDefault();
@@ -178,11 +182,20 @@ export class KeybindingSrv {
   }
 
   unbind(keyArg: string, keyType?: string) {
-    Mousetrap.unbind(keyArg, keyType);
+    mousetrap.unbind(keyArg, keyType);
   }
 
   bindWithPanelId(keyArg: string, fn: (panelId: number) => void) {
-    this.bind(keyArg, withFocusedPanel(fn));
+    this.bind(keyArg, this.withFocusedPanel(fn));
+  }
+
+  withFocusedPanel(fn: (panelId: number) => void) {
+    return () => {
+      if (typeof this.panelId === 'number') {
+        fn(this.panelId);
+        return;
+      }
+    };
   }
 
   setupTimeRangeBindings(updateUrl = true) {

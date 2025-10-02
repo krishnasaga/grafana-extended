@@ -1,16 +1,15 @@
 import { Meta, StoryFn } from '@storybook/react';
-import React from 'react';
 
 import { DashboardStoryCanvas } from '../../utils/storybook/DashboardStoryCanvas';
-import { ButtonGroup } from '../Button';
-import { HorizontalGroup, VerticalGroup } from '../Layout/Layout';
+import { ButtonGroup } from '../Button/ButtonGroup';
+import { Stack } from '../Layout/Stack/Stack';
 
 import { ToolbarButton, ToolbarButtonVariant } from './ToolbarButton';
 import mdx from './ToolbarButton.mdx';
 import { ToolbarButtonRow } from './ToolbarButtonRow';
 
 const meta: Meta<typeof ToolbarButton> = {
-  title: 'Buttons/ToolbarButton',
+  title: 'Navigation/ToolbarButton',
   component: ToolbarButton,
   parameters: {
     docs: {
@@ -94,7 +93,7 @@ export const Examples: StoryFn<typeof ToolbarButton> = (args) => {
 
   return (
     <DashboardStoryCanvas>
-      <VerticalGroup>
+      <Stack direction="column" gap={1.5}>
         Button states
         <ToolbarButtonRow>
           <ToolbarButton variant="canvas">Just text</ToolbarButton>
@@ -131,30 +130,30 @@ export const Examples: StoryFn<typeof ToolbarButton> = (args) => {
           <ToolbarButton variant="active" icon="clock-nine" tooltip="Time picker">
             2020-10-02
           </ToolbarButton>
-          <ToolbarButton variant="active" icon="search-minus" />
+          <ToolbarButton aria-label="Zoom out" variant="active" icon="search-minus" />
         </ButtonGroup>
         <br />
         <ButtonGroup>
-          <ToolbarButton variant="canvas" icon="sync" />
-          <ToolbarButton variant="canvas" isOpen={false} narrow />
+          <ToolbarButton aria-label="Refresh" variant="canvas" icon="sync" />
+          <ToolbarButton aria-label="Open menu" variant="canvas" isOpen={false} narrow />
         </ButtonGroup>
         <br />
         Inside button group
-        <HorizontalGroup>
+        <Stack>
           <ButtonGroup>
             <ToolbarButton variant="primary" icon="sync">
               Run query
             </ToolbarButton>
-            <ToolbarButton isOpen={false} narrow variant="primary" />
+            <ToolbarButton aria-label="Open menu" isOpen={false} narrow variant="primary" />
           </ButtonGroup>
           <ButtonGroup>
             <ToolbarButton variant="destructive" icon="sync">
               Run query
             </ToolbarButton>
-            <ToolbarButton isOpen={false} narrow variant="destructive" />
+            <ToolbarButton aria-label="Open menu" isOpen={false} narrow variant="destructive" />
           </ButtonGroup>
-        </HorizontalGroup>
-      </VerticalGroup>
+        </Stack>
+      </Stack>
     </DashboardStoryCanvas>
   );
 };

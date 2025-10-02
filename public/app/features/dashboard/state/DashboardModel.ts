@@ -17,19 +17,23 @@ import {
   TypedVariableModel,
   UrlQueryValue,
 } from '@grafana/data';
+import { PromQuery } from '@grafana/prometheus';
 import { RefreshEvent, TimeRangeUpdatedEvent, config } from '@grafana/runtime';
-import { Dashboard, DashboardLink } from '@grafana/schema';
+import { Dashboard, DashboardLink, VariableModel } from '@grafana/schema';
 import { DEFAULT_ANNOTATION_COLOR } from '@grafana/ui';
 import { GRID_CELL_HEIGHT, GRID_CELL_VMARGIN, GRID_COLUMN_COUNT, REPEAT_DIR_VERTICAL } from 'app/core/constants';
 import { contextSrv } from 'app/core/services/context_srv';
 import { sortedDeepCloneWithoutNulls } from 'app/core/utils/object';
-import { isAngularDatasourcePluginAndNotHidden } from 'app/features/plugins/angularDeprecation/utils';
 import { variableAdapters } from 'app/features/variables/adapters';
 import { onTimeRangeUpdated } from 'app/features/variables/state/actions';
 import { GetVariables, getVariablesByKey } from 'app/features/variables/state/selectors';
-import { PromQuery } from 'app/plugins/datasource/prometheus/types';
-import { CoreEvents, DashboardMeta, KioskMode } from 'app/types';
-import { DashboardMetaChangedEvent, DashboardPanelsChangedEvent, RenderEvent } from 'app/types/events';
+import { DashboardMeta } from 'app/types/dashboard';
+import {
+  DashboardMetaChangedEvent,
+  DashboardPanelsChangedEvent,
+  RenderEvent,
+  templateVariableValueUpdated,
+} from 'app/types/events';
 
 import { appEvents } from '../../../core/core';
 import { dispatch } from '../../../store/store';
@@ -55,6 +59,12 @@ export interface CloneOptions {
 }
 
 export type DashboardLinkType = 'link' | 'dashboards';
+
+/** @experimental */
+export interface ScopeMeta {
+  trait: string;
+  groups: string[];
+}
 
 export class DashboardModel implements TimeModel {
   /** @deprecated use UID */
@@ -87,6 +97,7 @@ export class DashboardModel implements TimeModel {
   panelInEdit?: PanelModel;
   panelInView?: PanelModel;
   fiscalYearStartMonth?: number;
+  scopeMeta?: ScopeMeta;
   private panelsAffectedByVariableChange: number[] | null;
   private appEventsSubscription: Subscription;
   private lastRefresh: number;
@@ -117,7 +128,7 @@ export class DashboardModel implements TimeModel {
     appEventsSubscription: true,
     panelsAffectedByVariableChange: true,
     lastRefresh: true,
-    timeRangeUpdatedDuringEdit: true,
+    timeRangeUpdatedDuringEditOrView: true,
     originalDashboard: true,
   };
 
@@ -127,13 +138,15 @@ export class DashboardModel implements TimeModel {
     options?: {
       // By default this uses variables from redux state
       getVariablesFromState?: GetVariables;
+      // Target schema version for migration (defaults to latest)
+      targetSchemaVersion?: number;
     }
   ) {
     this.getVariablesFromState = options?.getVariablesFromState ?? getVariablesByKey;
     this.events = new EventBusSrv();
     this.id = data.id || null;
     // UID is not there for newly created dashboards
-    this.uid = data.uid || null;
+    this.uid = data.uid || meta?.uid || null;
     this.revision = data.revision ?? undefined;
     this.title = data.title ?? 'No Title';
     this.description = data.description;
@@ -145,7 +158,7 @@ export class DashboardModel implements TimeModel {
     this.time = data.time ?? { from: 'now-6h', to: 'now' };
     this.timepicker = data.timepicker ?? {};
     this.liveNow = data.liveNow;
-    this.templating = this.ensureListExist(data.templating);
+    this.templating = this.removeNullValuesFromVariables(this.ensureListExist(data.templating));
     this.annotations = this.ensureListExist(data.annotations);
     this.refresh = data.refresh;
     this.snapshot = data.snapshot;
@@ -155,6 +168,8 @@ export class DashboardModel implements TimeModel {
     this.links = data.links ?? [];
     this.gnetId = data.gnetId || null;
     this.panels = map(data.panels ?? [], (panelData) => new PanelModel(panelData));
+    // @ts-expect-error - experimental and it's not included in the schema
+    this.scopeMeta = data.scopeMeta;
     // Deep clone original dashboard to avoid mutations by object reference
     this.originalDashboard = cloneDeep(data);
     this.originalTemplating = cloneDeep(this.templating);
@@ -164,7 +179,7 @@ export class DashboardModel implements TimeModel {
     this.formatDate = this.formatDate.bind(this);
 
     this.initMeta(meta);
-    this.updateSchema(data);
+    this.updateSchema(data, options?.targetSchemaVersion);
 
     this.addBuiltInAnnotationQuery();
     this.sortPanelsByGridPos();
@@ -277,6 +292,8 @@ export class DashboardModel implements TimeModel {
    *
    * @internal and experimental
    */
+  // TODO: remove this as it's not being used anymore
+  // Also remove public/app/features/dashboard/utils/panelMerge.ts
   updatePanels(panels: IPanelModel[]): PanelMergeInfo {
     const info = mergePanels(this.panels, panels ?? []);
     if (info.changed) {
@@ -469,6 +486,28 @@ export class DashboardModel implements TimeModel {
       }
       ids.add(panel.id);
     }
+  }
+
+  private removeNullValuesFromVariables(templating: { list: VariableModel[] }) {
+    if (!templating.list.length) {
+      return templating;
+    }
+
+    for (const variable of templating.list) {
+      if (variable.current) {
+        // this is a safeguard for null value that breaks scenes dashboards.
+        //    expecting error at .includes(null) in order to not adjust
+        //    VariableOption type to avoid breaking changes
+        if (
+          variable.current.value === null ||
+          //@ts-expect-error
+          (Array.isArray(variable.current.value) && variable.current.value.includes(null))
+        ) {
+          variable.current = undefined;
+        }
+      }
+    }
+    return templating;
   }
 
   private ensureListExist(data: any = {}) {
@@ -1083,9 +1122,9 @@ export class DashboardModel implements TimeModel {
     return this.timezone ? this.timezone : contextSrv?.user?.timezone;
   }
 
-  private updateSchema(old: any) {
+  private updateSchema(old: any, targetVersion?: number) {
     const migrator = new DashboardMigrator(this);
-    migrator.updateSchema(old);
+    migrator.updateSchema(old, targetVersion);
   }
 
   hasTimeChanged() {
@@ -1108,7 +1147,7 @@ export class DashboardModel implements TimeModel {
     let visibleHeight = viewHeight - navbarHeight - margin;
 
     // add back navbar height
-    if (kioskMode && kioskMode !== KioskMode.TV) {
+    if (kioskMode) {
       visibleHeight += navbarHeight;
     }
 
@@ -1123,7 +1162,7 @@ export class DashboardModel implements TimeModel {
 
   templateVariableValueUpdated() {
     this.processRepeats();
-    this.events.emit(CoreEvents.templateVariableValueUpdated);
+    this.events.emit(templateVariableValueUpdated);
   }
 
   getPanelByUrlId(panelUrlId: string) {
@@ -1156,7 +1195,14 @@ export class DashboardModel implements TimeModel {
   toggleExemplarsForAll() {
     for (const panel of this.panels) {
       for (const target of panel.targets) {
-        if (!(target.datasource && target.datasource.type === 'prometheus')) {
+        if (
+          !(
+            target.datasource &&
+            (target.datasource.type === 'prometheus' ||
+              target.datasource.type === 'grafana-amazonprometheus-datasource' ||
+              target.datasource.type === 'grafana-azureprometheus-datasource')
+          )
+        ) {
           continue;
         }
 
@@ -1221,6 +1267,10 @@ export class DashboardModel implements TimeModel {
 
   canEditDashboard() {
     return Boolean(this.meta.canEdit || this.meta.canMakeEditable);
+  }
+
+  canExecuteActions() {
+    return this.canEditDashboard();
   }
 
   shouldUpdateDashboardPanelFromJSON(updatedPanel: PanelModel, panel: PanelModel) {
@@ -1288,20 +1338,6 @@ export class DashboardModel implements TimeModel {
 
   getOriginalDashboard() {
     return this.originalDashboard;
-  }
-
-  hasAngularPlugins(): boolean {
-    return this.panels.some((panel) => {
-      // Return false for plugins that are angular but have angular.hideDeprecation = false
-      // We cannot use panel.plugin.isAngularPlugin() because panel.plugin may not be initialized at this stage.
-      const isAngularPanel =
-        config.panels[panel.type]?.angular?.detected && !config.panels[panel.type]?.angular?.hideDeprecation;
-      let isAngularDs = false;
-      if (panel.datasource?.uid) {
-        isAngularDs = isAngularDatasourcePluginAndNotHidden(panel.datasource?.uid);
-      }
-      return isAngularPanel || isAngularDs;
-    });
   }
 }
 

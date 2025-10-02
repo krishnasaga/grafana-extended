@@ -1,11 +1,12 @@
 import { css } from '@emotion/css';
-import React, { useCallback } from 'react';
+import { useCallback } from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
+import { selectors } from '@grafana/e2e-selectors';
+import { t } from '@grafana/i18n';
 import { locationService } from '@grafana/runtime';
 import { useStyles2 } from '@grafana/ui';
 import { useGrafana } from 'app/core/context/GrafanaContext';
-import { t } from 'app/core/internationalization';
 
 import { DismissableButton } from './DismissableButton';
 
@@ -28,7 +29,7 @@ export const ReturnToPrevious = ({ href, title }: ReturnToPreviousProps) => {
   }, [chrome]);
 
   return (
-    <div className={styles.returnToPrevious}>
+    <div className={styles.returnToPrevious} data-testid={selectors.components.ReturnToPrevious.buttonGroup}>
       <DismissableButton
         label={t('return-to-previous.button.label', 'Back to {{title}}', { title })}
         onClick={handleOnClick}

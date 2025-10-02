@@ -1,23 +1,29 @@
 import { action } from '@storybook/addon-actions';
 import { Meta, StoryFn } from '@storybook/react';
 import { merge } from 'lodash';
-import React, { CSSProperties, useState, ReactNode } from 'react';
+import { CSSProperties, useState, ReactNode } from 'react';
 import { useInterval, useToggle } from 'react-use';
 
 import { LoadingState } from '@grafana/data';
-import { Button, Icon, PanelChrome, PanelChromeProps, RadioButtonGroup } from '@grafana/ui';
 
 import { DashboardStoryCanvas } from '../../utils/storybook/DashboardStoryCanvas';
-import { HorizontalGroup } from '../Layout/Layout';
+import { Button } from '../Button/Button';
+import { RadioButtonGroup } from '../Forms/RadioButtonGroup/RadioButtonGroup';
+import { Icon } from '../Icon/Icon';
+import { Stack } from '../Layout/Stack/Stack';
+import { TextLink } from '../Link/TextLink';
 import { Menu } from '../Menu/Menu';
 
+import { PanelChromeProps } from './PanelChrome';
 import mdx from './PanelChrome.mdx';
+
+import { PanelChrome } from '.';
 
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 150;
 
 const meta: Meta<typeof PanelChrome> = {
-  title: 'Visualizations/PanelChrome',
+  title: 'Plugins/PanelChrome',
   component: PanelChrome,
   parameters: {
     controls: {
@@ -26,6 +32,8 @@ const meta: Meta<typeof PanelChrome> = {
     docs: {
       page: mdx,
     },
+    // TODO fix a11y issue in story and remove this
+    a11y: { test: 'off' },
   },
 };
 
@@ -124,7 +132,7 @@ export const Examples = () => {
   return (
     <DashboardStoryCanvas>
       <div>
-        <HorizontalGroup spacing="md" align="flex-start" wrap>
+        <Stack gap={2} alignItems="flex-start" wrap="wrap">
           {renderPanel('Has statusMessage', {
             title: 'Default title',
             statusMessage: 'Error text',
@@ -216,7 +224,7 @@ export const Examples = () => {
               <Button size="sm" variant="secondary" key="A">
                 Breakdown
               </Button>,
-              <Button size="sm" variant="secondary" icon="times" key="B" />,
+              <Button aria-label="Close" size="sm" variant="secondary" icon="times" key="B" />,
             ],
           })}
           {renderPanel('With radio button', {
@@ -237,13 +245,17 @@ export const Examples = () => {
             title: 'Default title',
             collapsible: true,
           })}
+          {renderPanel('Menu always visible', {
+            title: 'Menu always visible',
+            showMenuAlways: true,
+            menu,
+          })}
           {renderPanel('Panel with action link', {
             title: 'Panel with action link',
             actions: (
-              <a className="external-link" href="/some/page">
+              <TextLink external href="http://www.example.com/some/page">
                 Error details
-                <Icon name="arrow-right" />
-              </a>
+              </TextLink>
             ),
           })}
           {renderPanel('Action and menu (should be rare)', {
@@ -255,7 +267,7 @@ export const Examples = () => {
               </Button>
             ),
           })}
-        </HorizontalGroup>
+        </Stack>
       </div>
     </DashboardStoryCanvas>
   );
@@ -265,7 +277,7 @@ export const ExamplesHoverHeader = () => {
   return (
     <DashboardStoryCanvas>
       <div>
-        <HorizontalGroup spacing="md" align="flex-start" wrap>
+        <Stack gap={2} alignItems="flex-start" wrap="wrap">
           {renderPanel('Title items, menu, hover header', {
             title: 'Default title',
             description: 'This is a description',
@@ -310,13 +322,12 @@ export const ExamplesHoverHeader = () => {
             title: 'With link in hover header',
             hoverHeader: true,
             actions: (
-              <a className="external-link" href="/some/page">
+              <TextLink external href="http://www.example.com/some/page">
                 Error details
-                <Icon name="arrow-right" />
-              </a>
+              </TextLink>
             ),
           })}
-        </HorizontalGroup>
+        </Stack>
       </div>
     </DashboardStoryCanvas>
   );

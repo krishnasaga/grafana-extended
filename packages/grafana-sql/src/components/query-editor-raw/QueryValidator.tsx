@@ -1,9 +1,9 @@
 import { css } from '@emotion/css';
-import React, { useState, useMemo, useEffect } from 'react';
-import { useAsyncFn } from 'react-use';
-import useDebounce from 'react-use/lib/useDebounce';
+import { useState, useMemo, useEffect } from 'react';
+import { useAsyncFn, useDebounce } from 'react-use';
 
 import { formattedValueToString, getValueFormat, TimeRange } from '@grafana/data';
+import { Trans } from '@grafana/i18n';
 import { Icon, Spinner, useTheme2 } from '@grafana/ui';
 
 import { DB, SQLQuery, ValidationResults } from '../../types';
@@ -22,17 +22,17 @@ export function QueryValidator({ db, query, onValidate, range }: QueryValidatorP
 
   const styles = useMemo(() => {
     return {
-      error: css`
-        color: ${theme.colors.error.text};
-        font-size: ${theme.typography.bodySmall.fontSize};
-        font-family: ${theme.typography.fontFamilyMonospace};
-      `,
-      valid: css`
-        color: ${theme.colors.success.text};
-      `,
-      info: css`
-        color: ${theme.colors.text.secondary};
-      `,
+      error: css({
+        color: theme.colors.error.text,
+        fontSize: theme.typography.bodySmall.fontSize,
+        fontFamily: theme.typography.fontFamilyMonospace,
+      }),
+      valid: css({
+        color: theme.colors.success.text,
+      }),
+      info: css({
+        color: theme.colors.text.secondary,
+      }),
     };
   }, [theme]);
 
@@ -79,7 +79,8 @@ export function QueryValidator({ db, query, onValidate, range }: QueryValidatorP
     <>
       {state.loading && (
         <div className={styles.info}>
-          <Spinner inline={true} size="xs" /> Validating query...
+          <Spinner inline={true} size="xs" />{' '}
+          <Trans i18nKey="grafana-sql.components.query-validator.validating-query">Validating query...</Trans>
         </div>
       )}
       {!state.loading && state.value && (
@@ -87,9 +88,12 @@ export function QueryValidator({ db, query, onValidate, range }: QueryValidatorP
           <>
             {state.value.isValid && state.value.statistics && (
               <div className={styles.valid}>
-                <Icon name="check" /> This query will process{' '}
-                <strong>{formattedValueToString(valueFormatter(state.value.statistics.TotalBytesProcessed))}</strong>{' '}
-                when run.
+                <Trans
+                  i18nKey="grafana-sql.components.query-validator.query-will-process"
+                  values={{ bytes: formattedValueToString(valueFormatter(state.value.statistics.TotalBytesProcessed)) }}
+                >
+                  <Icon name="check" /> This query will process <strong>{'{{bytes}}'}</strong> when run.
+                </Trans>
               </div>
             )}
           </>

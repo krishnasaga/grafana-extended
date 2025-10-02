@@ -24,10 +24,9 @@ import (
 	"github.com/grafana/grafana/pkg/plugins/log"
 	"github.com/grafana/grafana/pkg/server"
 	"github.com/grafana/grafana/pkg/services/datasources"
-	"github.com/grafana/grafana/pkg/services/org"
-	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/tests/testinfra"
 	"github.com/grafana/grafana/pkg/tests/testsuite"
+	"github.com/grafana/grafana/pkg/util/testutil"
 )
 
 const loginCookieName = "grafana_session"
@@ -37,9 +36,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestIntegrationBackendPlugins(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
+	testutil.SkipIntegrationTestInShortMode(t)
 
 	oauthToken := &oauth2.Token{
 		TokenType:    "bearer",
@@ -482,15 +479,9 @@ func newTestScenario(t *testing.T, name string, opts []testScenarioOption, callb
 		})
 	}
 	tsCtx.grafanaListeningAddr = grafanaListeningAddr
-	testEnv.SQLStore.Cfg.LoginCookieName = loginCookieName
+	testEnv.Cfg.LoginCookieName = loginCookieName
 	tsCtx.testEnv = testEnv
 	ctx := context.Background()
-
-	u := testinfra.CreateUser(t, testEnv.SQLStore, user.CreateUserCommand{
-		DefaultOrgRole: string(org.RoleAdmin),
-		Password:       "admin",
-		Login:          "admin",
-	})
 
 	tsCtx.outgoingServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tsCtx.outgoingRequest = r
@@ -508,7 +499,7 @@ func newTestScenario(t *testing.T, name string, opts []testScenarioOption, callb
 
 	tsCtx.uid = "test-plugin"
 	cmd := &datasources.AddDataSourceCommand{
-		OrgID:          u.OrgID,
+		OrgID:          1,
 		Access:         datasources.DS_ACCESS_PROXY,
 		Name:           "TestPlugin",
 		Type:           tsCtx.testPluginID,
@@ -550,7 +541,7 @@ func newTestScenario(t *testing.T, name string, opts []testScenarioOption, callb
 	require.NoError(t, err)
 
 	getDataSourceQuery := &datasources.GetDataSourceQuery{
-		OrgID: u.OrgID,
+		OrgID: 1,
 		UID:   tsCtx.uid,
 	}
 	dataSource, err := testEnv.Server.HTTPServer.DataSourcesService.GetDataSource(ctx, getDataSourceQuery)
@@ -646,7 +637,7 @@ func (tsCtx *testScenarioContext) runQueryDataTest(t *testing.T, mr dtos.MetricR
 		require.NoError(t, err)
 
 		require.NotEmpty(t, tsCtx.outgoingRequest.Header.Get("Accept-Encoding"))
-		require.Equal(t, fmt.Sprintf("Grafana/%s", tsCtx.testEnv.SQLStore.Cfg.BuildVersion), tsCtx.outgoingRequest.Header.Get("User-Agent"))
+		require.Equal(t, fmt.Sprintf("Grafana/%s", tsCtx.testEnv.Cfg.BuildVersion), tsCtx.outgoingRequest.Header.Get("User-Agent"))
 
 		callback(received)
 	})
@@ -704,7 +695,7 @@ func (tsCtx *testScenarioContext) runCheckHealthTest(t *testing.T, callback func
 		require.NoError(t, err)
 
 		require.NotEmpty(t, tsCtx.outgoingRequest.Header.Get("Accept-Encoding"))
-		require.Equal(t, fmt.Sprintf("Grafana/%s", tsCtx.testEnv.SQLStore.Cfg.BuildVersion), tsCtx.outgoingRequest.Header.Get("User-Agent"))
+		require.Equal(t, fmt.Sprintf("Grafana/%s", tsCtx.testEnv.Cfg.BuildVersion), tsCtx.outgoingRequest.Header.Get("User-Agent"))
 
 		callback(received)
 	})
@@ -779,7 +770,7 @@ func (tsCtx *testScenarioContext) runCallResourceTest(t *testing.T, callback fun
 		require.Empty(t, tsCtx.outgoingRequest.Header.Get("X-Some-Conn-Header"))
 		require.Empty(t, tsCtx.outgoingRequest.Header.Get("Proxy-Connection"))
 		require.NotEmpty(t, tsCtx.outgoingRequest.Header.Get("Accept-Encoding"))
-		require.Equal(t, fmt.Sprintf("Grafana/%s", tsCtx.testEnv.SQLStore.Cfg.BuildVersion), tsCtx.outgoingRequest.Header.Get("User-Agent"))
+		require.Equal(t, fmt.Sprintf("Grafana/%s", tsCtx.testEnv.Cfg.BuildVersion), tsCtx.outgoingRequest.Header.Get("User-Agent"))
 
 		callback(received, resp)
 	})
@@ -846,6 +837,8 @@ type testPlugin struct {
 	backend.CallResourceHandler
 	backend.QueryDataHandler
 	backend.StreamHandler
+	backend.AdmissionHandler
+	backend.ConversionHandler
 }
 
 func (tp *testPlugin) PluginID() string {
@@ -931,6 +924,33 @@ func (tp *testPlugin) RunStream(ctx context.Context, req *backend.RunStreamReque
 		return tp.StreamHandler.RunStream(ctx, req, sender)
 	}
 	return plugins.ErrMethodNotImplemented
+}
+
+// ValidateAdmission implements backend.AdmissionHandler.
+func (tp *testPlugin) ValidateAdmission(ctx context.Context, req *backend.AdmissionRequest) (*backend.ValidationResponse, error) {
+	if tp.AdmissionHandler != nil {
+		return tp.AdmissionHandler.ValidateAdmission(ctx, req)
+	}
+
+	return nil, plugins.ErrMethodNotImplemented
+}
+
+// MutateAdmission implements backend.AdmissionHandler.
+func (tp *testPlugin) MutateAdmission(ctx context.Context, req *backend.AdmissionRequest) (*backend.MutationResponse, error) {
+	if tp.AdmissionHandler != nil {
+		return tp.AdmissionHandler.MutateAdmission(ctx, req)
+	}
+
+	return nil, plugins.ErrMethodNotImplemented
+}
+
+// ConvertObject implements backend.AdmissionHandler.
+func (tp *testPlugin) ConvertObjects(ctx context.Context, req *backend.ConversionRequest) (*backend.ConversionResponse, error) {
+	if tp.ConversionHandler != nil {
+		return tp.ConversionHandler.ConvertObjects(ctx, req)
+	}
+
+	return nil, plugins.ErrMethodNotImplemented
 }
 
 func metricRequestWithQueries(t *testing.T, rawQueries ...string) dtos.MetricRequest {

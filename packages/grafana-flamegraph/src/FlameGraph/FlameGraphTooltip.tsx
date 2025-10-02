@@ -1,7 +1,6 @@
 import { css } from '@emotion/css';
-import React from 'react';
 
-import { DisplayValue, getValueFormat, GrafanaTheme2 } from '@grafana/data';
+import { DisplayValue, getValueFormat, GrafanaTheme2, ValueFormatter } from '@grafana/data';
 import { InteractiveTable, Portal, useStyles2, VizTooltipContainer } from '@grafana/ui';
 
 import { CollapseConfig, FlameGraphDataContainer, LevelItem } from './dataTransform';
@@ -123,6 +122,11 @@ type DiffTableData = {
   diff: string | number;
 };
 
+const formatWithSuffix = (value: number, formatter: ValueFormatter): string => {
+  const displayValue = formatter(value);
+  return displayValue.text + displayValue.suffix;
+};
+
 export const getDiffTooltipData = (
   data: FlameGraphDataContainer,
   item: LevelItem,
@@ -149,7 +153,7 @@ export const getDiffTooltipData = (
       label: '% of total',
       baseline: percentageLeft + '%',
       comparison: percentageRight + '%',
-      diff: shortValFormat(diff).text + '%',
+      diff: formatWithSuffix(diff, shortValFormat) + '%',
     },
     {
       rowId: '2',
@@ -161,9 +165,9 @@ export const getDiffTooltipData = (
     {
       rowId: '3',
       label: 'Samples',
-      baseline: shortValFormat(valueLeft).text,
-      comparison: shortValFormat(item.valueRight!).text,
-      diff: shortValFormat(item.valueRight! - valueLeft).text,
+      baseline: formatWithSuffix(valueLeft, shortValFormat),
+      comparison: formatWithSuffix(item.valueRight!, shortValFormat),
+      diff: formatWithSuffix(item.valueRight! - valueLeft, shortValFormat),
     },
   ];
 };
@@ -182,33 +186,33 @@ function getValueWithUnit(data: FlameGraphDataContainer, displayValue: DisplayVa
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  tooltipContainer: css`
-    title: tooltipContainer;
-    overflow: hidden;
-  `,
-  tooltipContent: css`
-    title: tooltipContent;
-    font-size: ${theme.typography.bodySmall.fontSize};
-    width: 100%;
-  `,
-  tooltipName: css`
-    title: tooltipName;
-    margin-top: 0;
-    word-break: break-all;
-  `,
-  lastParagraph: css`
-    title: lastParagraph;
-    margin-bottom: 0;
-  `,
-  name: css`
-    title: name;
-    margin-bottom: 10px;
-  `,
+  tooltipContainer: css({
+    title: 'tooltipContainer',
+    overflow: 'hidden',
+  }),
+  tooltipContent: css({
+    title: 'tooltipContent',
+    fontSize: theme.typography.bodySmall.fontSize,
+    width: '100%',
+  }),
+  tooltipName: css({
+    title: 'tooltipName',
+    marginTop: 0,
+    wordBreak: 'break-all',
+  }),
+  lastParagraph: css({
+    title: 'lastParagraph',
+    marginBottom: 0,
+  }),
+  name: css({
+    title: 'name',
+    marginBottom: '10px',
+  }),
 
-  tooltipTable: css`
-    title: tooltipTable;
-    max-width: 400px;
-  `,
+  tooltipTable: css({
+    title: 'tooltipTable',
+    maxWidth: '400px',
+  }),
 });
 
 export default FlameGraphTooltip;

@@ -4,8 +4,8 @@ import { getLibraryPanel } from 'app/features/library-panels/state/api';
 import { LibraryElementDTO } from 'app/features/library-panels/types';
 import { getPanelPluginNotFound } from 'app/features/panel/components/PanelPluginError';
 import { loadPanelPlugin } from 'app/features/plugins/admin/state/actions';
-import { ThunkResult } from 'app/types';
 import { DashboardPanelsChangedEvent, PanelOptionsChangedEvent, PanelQueriesChangedEvent } from 'app/types/events';
+import { ThunkResult } from 'app/types/store';
 
 import { changePanelKey, panelModelAndPluginReady, removePanel } from './reducers';
 
@@ -15,6 +15,13 @@ export function initPanelState(panel: PanelModel): ThunkResult<Promise<void>> {
       // this will call init with a loaded library panel if it loads succesfully
       dispatch(loadLibraryPanelAndUpdate(panel));
       return;
+    }
+
+    // Some old panels, somehow have maxDataPoints value as string.
+    // This is causing problems on the backend-side.
+    // Here we make sure maxDataPoints is always as number.
+    if (panel.maxDataPoints) {
+      panel.maxDataPoints = Number(panel.maxDataPoints);
     }
 
     let pluginToLoad = panel.type;

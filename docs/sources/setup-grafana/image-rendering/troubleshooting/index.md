@@ -32,7 +32,7 @@ You can enable debug log messages for rendering in the Grafana configuration fil
 filters = rendering:debug
 ```
 
-You can also enable more logs in image renderer service itself by enabling [debug logging]({{< relref "#enable-debug-logging" >}}).
+You can also enable more logs in image renderer service itself by enabling [debug logging](#enable-debug-logging).
 
 ## Missing libraries
 
@@ -49,7 +49,7 @@ are not installed in your system:
 
 ```bash
 cd <grafana-image-render plugin directory>
-ldd chrome-linux/chrome
+ldd chrome-headless-shell/linux-132.0.6781.0/chrome-headless-shell-linux64/chrome-headless-shell
       linux-vdso.so.1 (0x00007fff1bf65000)
       libdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x00007f2047945000)
       libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007f2047924000)
@@ -61,41 +61,8 @@ ldd chrome-linux/chrome
         ...
 ```
 
-**Ubuntu:**
-
-On Ubuntu 18.10 the following dependencies are required for the image rendering to function.
-
-```bash
-libx11-6 libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrender1 libxtst6 libglib2.0-0 libnss3 libcups2  libdbus-1-3 libxss1 libxrandr2 libgtk-3-0 libasound2 libxcb-dri3-0 libgbm1 libxshmfence1
-```
-
-**Debian:**
-
-On Debian 9 (Stretch) the following dependencies are required for the image rendering to function.
-
-```bash
-libx11 libcairo libcairo2 libxtst6 libxcomposite1 libx11-xcb1 libxcursor1 libxdamage1 libnss3 libcups libcups2 libxss libxss1 libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 libpangocairo-1.0-0 libgtk-3-0 libgbm1 libxshmfence1
-```
-
-On Debian 10 (Buster) the following dependencies are required for the image rendering to function.
-
-```bash
-libxdamage1 libxext6 libxi6 libxtst6 libnss3 libcups2 libxss1 libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 libpangocairo-1.0-0 libpango-1.0-0 libcairo2 libatspi2.0-0 libgtk3.0-cil libgdk3.0-cil libx11-xcb-dev libgbm1 libxshmfence1
-```
-
-**Centos:**
-
-On a minimal CentOS 7 installation, the following dependencies are required for the image rendering to function:
-
-```bash
-libXcomposite libXdamage libXtst cups libXScrnSaver pango atk adwaita-cursor-theme adwaita-icon-theme at at-spi2-atk at-spi2-core cairo-gobject colord-libs dconf desktop-file-utils ed emacs-filesystem gdk-pixbuf2 glib-networking gnutls gsettings-desktop-schemas gtk-update-icon-cache gtk3 hicolor-icon-theme jasper-libs json-glib libappindicator-gtk3 libdbusmenu libdbusmenu-gtk3 libepoxy liberation-fonts liberation-narrow-fonts liberation-sans-fonts liberation-serif-fonts libgusb libindicator-gtk3 libmodman libproxy libsoup libwayland-cursor libwayland-egl libxkbcommon m4 mailx nettle patch psmisc redhat-lsb-core redhat-lsb-submod-security rest spax time trousers xdg-utils xkeyboard-config alsa-lib
-```
-
-On a minimal CentOS 8 installation, the following dependencies are required for the image rendering to function:
-
-```bash
-libXcomposite libXdamage libXtst cups libXScrnSaver pango atk adwaita-cursor-theme adwaita-icon-theme at at-spi2-atk at-spi2-core cairo-gobject colord-libs dconf desktop-file-utils ed emacs-filesystem gdk-pixbuf2 glib-networking gnutls gsettings-desktop-schemas gtk-update-icon-cache gtk3 hicolor-icon-theme jasper-libs json-glib libappindicator-gtk3 libdbusmenu libdbusmenu-gtk3 libepoxy liberation-fonts liberation-narrow-fonts liberation-sans-fonts liberation-serif-fonts libgusb libindicator-gtk3 libmodman libproxy libsoup libwayland-cursor libwayland-egl libxkbcommon m4 mailx nettle patch psmisc redhat-lsb-core redhat-lsb-submod-security rest spax time trousers xdg-utils xkeyboard-config alsa-lib libX11-xcb
-```
+You can find a reference to all the relevant Debian packages for the service to function [in the Dockerfile](https://github.com/grafana/grafana-image-renderer/blob/master/Dockerfile).
+If you are using an operating system that is not Debian 12, you should look up what each of those packages are called on your system.
 
 ## Certificate signed by internal certificate authorities
 
@@ -119,11 +86,43 @@ If this happens, then you have to add the certificate to the trust store. If you
 [root@server ~]# chown -R grafana: /usr/share/grafana/.pki/nssdb
 ```
 
+You may also have to use other tooling than `certutil`, such as `update-ca-certificates` and its accompanying paths.
+This depends on the Linux distribution you use; distributions often have a wiki with this type of information.
+
 **Windows:**
 
 ```
 certutil –addstore "Root" <path>/internal-root-ca.crt.pem
 ```
+
+**Container:**
+
+```Dockerfile
+FROM grafana/grafana-image-renderer:latest
+
+# Elevate our permissions to access system resources.
+USER root
+
+RUN mkdir -p /usr/local/share/ca-certificates/
+# Convert from .pem to .crt
+RUN openssl x509 -inform PEM -in rootCA.pem -out /usr/local/share/ca-certificates/rootCA.crt
+
+# Regenerate the CA certificates in the container.
+RUN update-ca-certificates --fresh
+
+# Reassume the nonroot user for the service execution.
+USER nonroot
+
+# Some CA certificates also need to explicitly be included in the user's network security services database.
+# certutil is shipped in v4.0.8 and onwards of the image.
+RUN mkdir -p /home/nonroot/.pki/nssdb
+RUN certutil -d sql:/home/nonroot/.pki/nssdb -A -n internal-root-ca -t C -i /usr/local/share/ca-certificates/rootCA.crt
+```
+
+{{< admonition type="note" >}}
+The container image was based on Alpine until v4.0.0.
+After this point, it is based on distroless Debian.
+{{< /admonition >}}
 
 ## Custom Chrome/Chromium
 
@@ -131,10 +130,10 @@ As a last resort, if you already have [Chrome](https://www.google.com/chrome/) o
 installed on your system, then you can configure the Grafana Image renderer plugin to use this
 instead of the pre-packaged version of Chromium.
 
-{{% admonition type="note" %}}
+{{< admonition type="note" >}}
 Please note that this is not recommended, since you may encounter problems if the installed version of Chrome/Chromium is not
 compatible with the [Grafana Image renderer plugin](/grafana/plugins/grafana-image-renderer).
-{{% /admonition %}}
+{{< /admonition >}}
 
 To override the path to the Chrome/Chromium executable in plugin mode, set an environment variable and make sure that it's available for the Grafana process. For example:
 

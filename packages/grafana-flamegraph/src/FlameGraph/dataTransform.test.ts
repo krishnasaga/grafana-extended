@@ -1,6 +1,12 @@
 import { createDataFrame, FieldType } from '@grafana/data';
 
-import { CollapsedMapContainer, FlameGraphDataContainer, LevelItem, nestedSetToLevels } from './dataTransform';
+import {
+  CollapsedMapBuilder,
+  FlameGraphDataContainer,
+  LevelItem,
+  nestedSetToLevels,
+  CollapsedMap,
+} from './dataTransform';
 import { textToDataContainer } from './testHelpers';
 
 describe('nestedSetToLevels', () => {
@@ -52,6 +58,30 @@ describe('nestedSetToLevels', () => {
         { name: 'level', values: [0, 1, 1, 1] },
         { name: 'value', values: [10, 5, 3, 1] },
         { name: 'label', values: ['1', '2', '3', '4'], type: FieldType.string },
+        { name: 'self', values: [10, 5, 3, 1] },
+      ],
+    });
+    const [levels] = nestedSetToLevels(new FlameGraphDataContainer(frame, { collapsing: true }));
+
+    const n4: LevelItem = { itemIndexes: [3], start: 8, children: [], value: 1, level: 1 };
+    const n3: LevelItem = { itemIndexes: [2], start: 5, children: [], value: 3, level: 1 };
+    const n2: LevelItem = { itemIndexes: [1], start: 0, children: [], value: 5, level: 1 };
+    const n1: LevelItem = { itemIndexes: [0], start: 0, children: [n2, n3, n4], value: 10, level: 0 };
+
+    n2.parents = [n1];
+    n3.parents = [n1];
+    n4.parents = [n1];
+
+    expect(levels[0]).toEqual([n1]);
+    expect(levels[1]).toEqual([n2, n3, n4]);
+  });
+
+  it('handles strings that collide with inherited prototype method names', () => {
+    const frame = createDataFrame({
+      fields: [
+        { name: 'level', values: [0, 1, 1, 1] },
+        { name: 'value', values: [10, 5, 3, 1] },
+        { name: 'label', values: ['toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf'], type: FieldType.string },
         { name: 'self', values: [10, 5, 3, 1] },
       ],
     });
@@ -126,7 +156,7 @@ describe('CollapsedMapContainer', () => {
   };
 
   it('groups items if they are within value threshold', () => {
-    const container = new CollapsedMapContainer();
+    const container = new CollapsedMapBuilder();
 
     const child2: LevelItem = {
       ...defaultItem,
@@ -147,13 +177,13 @@ describe('CollapsedMapContainer', () => {
 
     container.addItem(child1, parent);
     container.addItem(child2, child1);
-    expect(container.getMap().get(child1)).toMatchObject({ collapsed: true, items: [parent, child1, child2] });
-    expect(container.getMap().get(child2)).toMatchObject({ collapsed: true, items: [parent, child1, child2] });
-    expect(container.getMap().get(parent)).toMatchObject({ collapsed: true, items: [parent, child1, child2] });
+    expect(container.getCollapsedMap().get(child1)).toMatchObject({ collapsed: true, items: [parent, child1, child2] });
+    expect(container.getCollapsedMap().get(child2)).toMatchObject({ collapsed: true, items: [parent, child1, child2] });
+    expect(container.getCollapsedMap().get(parent)).toMatchObject({ collapsed: true, items: [parent, child1, child2] });
   });
 
   it("doesn't group items if they are outside value threshold", () => {
-    const container = new CollapsedMapContainer();
+    const container = new CollapsedMapBuilder();
 
     const parent: LevelItem = {
       ...defaultItem,
@@ -166,11 +196,11 @@ describe('CollapsedMapContainer', () => {
     };
 
     container.addItem(child, parent);
-    expect(container.getMap().size).toBe(0);
+    expect(container.getCollapsedMap().size()).toBe(0);
   });
 
   it("doesn't group items if parent has multiple children", () => {
-    const container = new CollapsedMapContainer();
+    const container = new CollapsedMapBuilder();
 
     const child1: LevelItem = {
       ...defaultItem,
@@ -190,6 +220,52 @@ describe('CollapsedMapContainer', () => {
     };
 
     container.addItem(child1, parent);
-    expect(container.getMap().size).toBe(0);
+    expect(container.getCollapsedMap().size()).toBe(0);
+  });
+});
+
+describe('CollapsedMap', () => {
+  function getMap() {
+    const container = textToDataContainer(`
+      [0///////////]
+      [1][3//][6///]
+      [2]     [9/]
+    `)!;
+
+    const items = container.getLevels();
+
+    return {
+      map: new CollapsedMap(
+        new Map([
+          [items[1][0], { items: [items[1][0], items[2][0]], collapsed: false }],
+          [items[1][2], { items: [items[1][2], items[2][1]], collapsed: true }],
+        ])
+      ),
+      items,
+    };
+  }
+
+  it('collapses and expands single item', () => {
+    const { map: collapsedMap, items } = getMap();
+    let newMap = collapsedMap.setCollapsedStatus(items[1][0], true);
+    expect(collapsedMap.get(items[1][0])?.collapsed).toBe(false);
+    expect(newMap.get(items[1][0])?.collapsed).toBe(true);
+
+    newMap = collapsedMap.setCollapsedStatus(items[1][2], false);
+    expect(collapsedMap.get(items[1][2])?.collapsed).toBe(true);
+    expect(newMap.get(items[1][2])?.collapsed).toBe(false);
+  });
+
+  it('collapses and expands all items', () => {
+    const { map: collapsedMap, items } = getMap();
+    let newMap = collapsedMap.setAllCollapsedStatus(true);
+    expect(collapsedMap.get(items[1][0])?.collapsed).toBe(false);
+    expect(newMap.get(items[1][0])?.collapsed).toBe(true);
+    expect(newMap.get(items[1][2])?.collapsed).toBe(true);
+
+    newMap = collapsedMap.setAllCollapsedStatus(false);
+    expect(collapsedMap.get(items[1][2])?.collapsed).toBe(true);
+    expect(newMap.get(items[1][0])?.collapsed).toBe(false);
+    expect(newMap.get(items[1][2])?.collapsed).toBe(false);
   });
 });

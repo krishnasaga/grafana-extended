@@ -1,10 +1,11 @@
 import { css, cx } from '@emotion/css';
-import React, { useCallback } from 'react';
+import { useCallback } from 'react';
+import * as React from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
 
-import { useStyles2 } from '../../themes';
+import { useStyles2 } from '../../themes/ThemeContext';
 
 import { VizLegendSeriesIcon } from './VizLegendSeriesIcon';
 import { VizLegendStatsList } from './VizLegendStatsList';
@@ -70,7 +71,13 @@ export const VizLegendListItem = <T = unknown,>({
       className={cx(styles.itemWrapper, item.disabled && styles.itemDisabled, className)}
       data-testid={selectors.components.VizLegend.seriesName(item.label)}
     >
-      <VizLegendSeriesIcon seriesName={item.label} color={item.color} gradient={item.gradient} readonly={readonly} />
+      <VizLegendSeriesIcon
+        seriesName={item.fieldName ?? item.label}
+        color={item.color}
+        gradient={item.gradient}
+        readonly={readonly}
+        lineStyle={item.lineStyle}
+      />
       <button
         disabled={readonly}
         type="button"

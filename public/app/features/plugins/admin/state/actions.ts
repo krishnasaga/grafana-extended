@@ -3,11 +3,11 @@ import { from, forkJoin, timeout, lastValueFrom, catchError, of } from 'rxjs';
 
 import { PanelPlugin, PluginError } from '@grafana/data';
 import { config, getBackendSrv, isFetchError } from '@grafana/runtime';
-import configCore from 'app/core/config';
+import { Settings } from 'app/core/config';
 import { importPanelPlugin } from 'app/features/plugins/importPanelPlugin';
-import { StoreState, ThunkResult } from 'app/types';
+import { StoreState, ThunkResult } from 'app/types/store';
 
-import { invalidatePluginInCache } from '../../loader/cache';
+import { clearPluginInfoInCache } from '../../loader/pluginInfoCache';
 import {
   getRemotePlugins,
   getPluginErrors,
@@ -19,8 +19,8 @@ import {
   getProvisionedPlugins,
 } from '../api';
 import { STATE_PREFIX } from '../constants';
-import { mapLocalToCatalog, mergeLocalsAndRemotes, updatePanels } from '../helpers';
-import { CatalogPlugin, RemotePlugin, LocalPlugin, InstancePlugin, ProvisionedPlugin } from '../types';
+import { mapLocalToCatalog, mergeLocalsAndRemotes } from '../helpers';
+import { CatalogPlugin, RemotePlugin, LocalPlugin, InstancePlugin, ProvisionedPlugin, PluginStatus } from '../types';
 
 // Fetches
 export const fetchAll = createAsyncThunk(`${STATE_PREFIX}/fetchAll`, async (_, thunkApi) => {
@@ -28,14 +28,8 @@ export const fetchAll = createAsyncThunk(`${STATE_PREFIX}/fetchAll`, async (_, t
     thunkApi.dispatch({ type: `${STATE_PREFIX}/fetchLocal/pending` });
     thunkApi.dispatch({ type: `${STATE_PREFIX}/fetchRemote/pending` });
 
-    const instance$ =
-      config.pluginAdminExternalManageEnabled && configCore.featureToggles.managedPluginsInstall
-        ? from(getInstancePlugins())
-        : of(undefined);
-    const provisioned$ =
-      config.pluginAdminExternalManageEnabled && configCore.featureToggles.managedPluginsInstall
-        ? from(getProvisionedPlugins())
-        : of(undefined);
+    const instance$ = config.pluginAdminExternalManageEnabled ? from(getInstancePlugins()) : of(undefined);
+    const provisioned$ = config.pluginAdminExternalManageEnabled ? from(getProvisionedPlugins()) : of(undefined);
     const TIMEOUT = 500;
     const pluginErrors$ = from(getPluginErrors());
     const local$ = from(getLocalPlugins());
@@ -155,9 +149,9 @@ export const fetchRemotePlugins = createAsyncThunk<RemotePlugin[], void, { rejec
   }
 );
 
-export const fetchDetails = createAsyncThunk<Update<CatalogPlugin>, string>(
+export const fetchDetails = createAsyncThunk<Update<CatalogPlugin, string>, string>(
   `${STATE_PREFIX}/fetchDetails`,
-  async (id: string, thunkApi) => {
+  async (id, thunkApi) => {
     try {
       const details = await getPluginDetails(id);
 
@@ -175,12 +169,12 @@ export const addPlugins = createAction<CatalogPlugin[]>(`${STATE_PREFIX}/addPlug
 
 // 1. gets remote equivalents from the store (if there are any)
 // 2. merges the remote equivalents with the local plugins
-// 3. updates the the store with the updated CatalogPlugin objects
+// 3. updates the store with the updated CatalogPlugin objects
 export const addLocalPlugins = createAction<LocalPlugin[]>(`${STATE_PREFIX}/addLocalPlugins`);
 
 // 1. gets local equivalents from the store (if there are any)
 // 2. merges the local equivalents with the remote plugins
-// 3. updates the the store with the updated CatalogPlugin objects
+// 3. updates the store with the updated CatalogPlugin objects
 export const addRemotePlugins = createAction<RemotePlugin[]>(`${STATE_PREFIX}/addLocalPlugins`);
 
 // 1. merges the local and remote plugins
@@ -191,28 +185,36 @@ export const addLocalAndRemotePlugins = createAction<{ local: LocalPlugin[]; rem
 
 // We are also using the install API endpoint to update the plugin
 export const install = createAsyncThunk<
-  Update<CatalogPlugin>,
+  Update<CatalogPlugin, string>,
   {
     id: string;
     version?: string;
-    isUpdating?: boolean;
+    installType?: PluginStatus;
   }
->(`${STATE_PREFIX}/install`, async ({ id, version, isUpdating = false }, thunkApi) => {
-  const changes = isUpdating
-    ? { isInstalled: true, installedVersion: version, hasUpdate: false }
-    : { isInstalled: true, installedVersion: version };
+>(`${STATE_PREFIX}/install`, async ({ id, version, installType = PluginStatus.INSTALL }, thunkApi) => {
+  const changes: Partial<CatalogPlugin> = { isInstalled: true, installedVersion: version };
+
+  if (installType === PluginStatus.UPDATE) {
+    changes.hasUpdate = false;
+  }
+  if (installType === PluginStatus.DOWNGRADE) {
+    changes.hasUpdate = true;
+  }
+
   try {
-    await installPlugin(id);
+    await installPlugin(id, version);
     await updatePanels();
 
-    if (isUpdating) {
-      invalidatePluginInCache(id);
+    if (installType !== PluginStatus.INSTALL) {
+      clearPluginInfoInCache(id);
     }
 
     return { id, changes };
   } catch (e) {
     console.error(e);
     if (isFetchError(e)) {
+      // add id to identify errors in multiple requests
+      e.data.id = id;
       return thunkApi.rejectWithValue(e.data);
     }
 
@@ -222,18 +224,18 @@ export const install = createAsyncThunk<
 
 export const unsetInstall = createAsyncThunk(`${STATE_PREFIX}/install`, async () => ({}));
 
-export const uninstall = createAsyncThunk<Update<CatalogPlugin>, string>(
+export const uninstall = createAsyncThunk<Update<CatalogPlugin, string>, string>(
   `${STATE_PREFIX}/uninstall`,
   async (id, thunkApi) => {
     try {
       await uninstallPlugin(id);
       await updatePanels();
 
-      invalidatePluginInCache(id);
+      clearPluginInfoInCache(id);
 
       return {
         id,
-        changes: { isInstalled: false, installedVersion: undefined },
+        changes: { isInstalled: false, installedVersion: undefined, isFullyInstalled: false },
       };
     } catch (e) {
       console.error(e);
@@ -277,3 +279,11 @@ export const loadPanelPlugin = (id: string): ThunkResult<Promise<PanelPlugin>> =
     return plugin;
   };
 };
+
+function updatePanels() {
+  return getBackendSrv()
+    .get('/api/frontend/settings')
+    .then((settings: Settings) => {
+      config.panels = settings.panels;
+    });
+}

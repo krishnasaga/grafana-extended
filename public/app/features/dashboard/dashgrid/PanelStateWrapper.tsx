@@ -1,4 +1,5 @@
-import React, { PureComponent } from 'react';
+import { debounce } from 'lodash';
+import { PureComponent } from 'react';
 import { Subscription } from 'rxjs';
 
 import {
@@ -16,6 +17,7 @@ import {
   PanelData,
   PanelPlugin,
   PanelPluginMeta,
+  SetPanelAttentionEvent,
   TimeRange,
   toDataFrameDTO,
   toUtc,
@@ -30,8 +32,10 @@ import {
   SeriesVisibilityChangeMode,
   AdHocFilterItem,
 } from '@grafana/ui';
+import appEvents from 'app/core/app_events';
 import config from 'app/core/config';
 import { profiler } from 'app/core/profiler';
+import { annotationServer } from 'app/features/annotations/api';
 import { applyPanelTimeOverrides } from 'app/features/dashboard/utils/panel';
 import { getDatasourceSrv } from 'app/features/plugins/datasource_srv';
 import { applyFilterFromTable } from 'app/features/variables/adhoc/actions';
@@ -40,10 +44,10 @@ import { changeSeriesColorConfigFactory } from 'app/plugins/panel/timeseries/ove
 import { dispatch } from 'app/store/store';
 import { RenderEvent } from 'app/types/events';
 
-import { deleteAnnotation, saveAnnotation, updateAnnotation } from '../../annotations/api';
 import { getDashboardQueryRunner } from '../../query/state/DashboardQueryRunner/DashboardQueryRunner';
 import { getTimeSrv, TimeSrv } from '../services/TimeSrv';
-import { DashboardModel, PanelModel } from '../state';
+import { DashboardModel } from '../state/DashboardModel';
+import { PanelModel } from '../state/PanelModel';
 import { getPanelChromeProps } from '../utils/getPanelChromeProps';
 import { loadSnapshotData } from '../utils/loadSnapshotData';
 
@@ -90,6 +94,7 @@ export class PanelStateWrapper extends PureComponent<Props, State> {
 
     // Can this eventBus be on PanelModel?  when we have more complex event filtering, that may be a better option
     const eventBus = props.dashboard.events.newScopedBus(`panel:${props.panel.id}`, this.eventFilter);
+    this.debouncedSetPanelAttention = debounce(this.setPanelAttention.bind(this), 100);
 
     this.state = {
       isFirstLoad: true,
@@ -109,6 +114,7 @@ export class PanelStateWrapper extends PureComponent<Props, State> {
         canAddAnnotations: props.dashboard.canAddAnnotations.bind(props.dashboard),
         canEditAnnotations: props.dashboard.canEditAnnotations.bind(props.dashboard),
         canDeleteAnnotations: props.dashboard.canDeleteAnnotations.bind(props.dashboard),
+        canExecuteActions: props.dashboard.canExecuteActions.bind(props.dashboard),
         onAddAdHocFilter: this.onAddAdHocFilter,
         onUpdateData: this.onUpdateData,
       },
@@ -357,6 +363,7 @@ export class PanelStateWrapper extends PureComponent<Props, State> {
       panel.runAllPanelQueries({
         dashboardUID: dashboard.uid,
         dashboardTimezone: dashboard.getTimezone(),
+        dashboardTitle: dashboard.title,
         timeData,
         width,
       });
@@ -375,7 +382,7 @@ export class PanelStateWrapper extends PureComponent<Props, State> {
     this.setState(stateUpdate);
   };
 
-  onOptionsChange = (options: any) => {
+  onOptionsChange = (options: object) => {
     this.props.panel.updateOptions(options);
   };
 
@@ -414,13 +421,13 @@ export class PanelStateWrapper extends PureComponent<Props, State> {
       tags: event.tags,
       text: event.description,
     };
-    await saveAnnotation(anno);
+    await annotationServer().save(anno);
     getDashboardQueryRunner().run({ dashboard: this.props.dashboard, range: this.timeSrv.timeRange() });
     this.state.context.eventBus.publish(new AnnotationChangeEvent(anno));
   };
 
   onAnnotationDelete = async (id: string) => {
-    await deleteAnnotation({ id });
+    await annotationServer().delete({ id });
     getDashboardQueryRunner().run({ dashboard: this.props.dashboard, range: this.timeSrv.timeRange() });
     this.state.context.eventBus.publish(new AnnotationChangeEvent({ id }));
   };
@@ -437,7 +444,7 @@ export class PanelStateWrapper extends PureComponent<Props, State> {
       tags: event.tags,
       text: event.description,
     };
-    await updateAnnotation(anno);
+    await annotationServer().update(anno);
 
     getDashboardQueryRunner().run({ dashboard: this.props.dashboard, range: this.timeSrv.timeRange() });
     this.state.context.eventBus.publish(new AnnotationChangeEvent(anno));
@@ -544,11 +551,16 @@ export class PanelStateWrapper extends PureComponent<Props, State> {
     );
   }
 
+  setPanelAttention() {
+    appEvents.publish(new SetPanelAttentionEvent({ panelId: this.props.panel.id }));
+  }
+
+  debouncedSetPanelAttention() {}
+
   render() {
     const { dashboard, panel, width, height, plugin } = this.props;
     const { errorMessage, data } = this.state;
     const { transparent } = panel;
-
     const panelChromeProps = getPanelChromeProps({ ...this.props, data });
 
     // Shift the hover menu down if it's on the top row so it doesn't get clipped by topnav
@@ -578,7 +590,9 @@ export class PanelStateWrapper extends PureComponent<Props, State> {
         hoverHeader={panelChromeProps.hasOverlayHeader()}
         displayMode={transparent ? 'transparent' : 'default'}
         onCancelQuery={panelChromeProps.onCancelQuery}
-        onOpenMenu={panelChromeProps.onOpenMenu}
+        onFocus={() => this.setPanelAttention()}
+        onMouseEnter={() => this.setPanelAttention()}
+        onMouseMove={() => this.debouncedSetPanelAttention()}
       >
         {(innerWidth, innerHeight) => (
           <>

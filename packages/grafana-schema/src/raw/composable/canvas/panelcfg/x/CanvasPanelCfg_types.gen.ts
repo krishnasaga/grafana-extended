@@ -10,7 +10,7 @@
 
 import * as ui from '@grafana/schema';
 
-export const pluginVersion = "11.0.0-pre";
+export const pluginVersion = "12.3.0-pre";
 
 export enum HorizontalConstraint {
   Center = 'center',
@@ -38,6 +38,7 @@ export interface Placement {
   height?: number;
   left?: number;
   right?: number;
+  rotation?: number;
   top?: number;
   width?: number;
 }
@@ -58,6 +59,7 @@ export interface BackgroundConfig {
 
 export interface LineConfig {
   color?: ui.ColorDimensionConfig;
+  radius?: number;
   width?: number;
 }
 
@@ -78,12 +80,20 @@ export enum ConnectionPath {
 
 export interface CanvasConnection {
   color?: ui.ColorDimensionConfig;
+  direction?: ui.DirectionDimensionConfig;
   path: ConnectionPath;
   size?: ui.ScaleDimensionConfig;
   source: ConnectionCoordinates;
+  sourceOriginal?: ConnectionCoordinates;
   target: ConnectionCoordinates;
   targetName?: string;
+  targetOriginal?: ConnectionCoordinates;
+  vertices?: Array<ConnectionCoordinates>;
 }
+
+export const defaultCanvasConnection: Partial<CanvasConnection> = {
+  vertices: [],
+};
 
 export interface CanvasElementOptions {
   background?: BackgroundConfig;
@@ -102,6 +112,11 @@ export interface CanvasElementOptions {
 export const defaultCanvasElementOptions: Partial<CanvasElementOptions> = {
   connections: [],
 };
+
+export interface CanvasTooltip {
+  disableForOneClick?: boolean;
+  mode: ui.TooltipDisplayMode;
+}
 
 export interface Options {
   /**
@@ -134,10 +149,19 @@ export interface Options {
    * Show all available element types
    */
   showAdvancedTypes: boolean;
+  /**
+   * Controls tooltip options
+   */
+  tooltip: CanvasTooltip;
+  /**
+   * Zoom to content
+   */
+  zoomToContent: boolean;
 }
 
 export const defaultOptions: Partial<Options> = {
   inlineEditing: true,
   panZoom: true,
   showAdvancedTypes: true,
+  zoomToContent: true,
 };

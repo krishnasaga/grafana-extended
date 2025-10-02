@@ -1,19 +1,23 @@
 import { css, cx } from '@emotion/css';
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
+import { t, Trans } from '@grafana/i18n';
 import { config } from '@grafana/runtime';
-import { ErrorBoundaryAlert, useStyles2, useTheme2 } from '@grafana/ui';
+import { ErrorBoundaryAlert, LoadingPlaceholder, useStyles2, useTheme2 } from '@grafana/ui';
 import { SplitPaneWrapper } from 'app/core/components/SplitPaneWrapper/SplitPaneWrapper';
 import { useGrafana } from 'app/core/context/GrafanaContext';
 import { useNavModel } from 'app/core/hooks/useNavModel';
 import { GrafanaRouteComponentProps } from 'app/core/navigation/types';
-import { useSelector } from 'app/types';
 import { ExploreQueryParams } from 'app/types/explore';
+import { useSelector } from 'app/types/store';
 
 import { CorrelationEditorModeBar } from './CorrelationEditorModeBar';
 import { ExploreActions } from './ExploreActions';
+import { ExploreDrawer } from './ExploreDrawer';
 import { ExplorePaneContainer } from './ExplorePaneContainer';
+import { useQueriesDrawerContext } from './QueriesDrawer/QueriesDrawerContext';
+import RichHistoryContainer from './RichHistory/RichHistoryContainer';
 import { useExplorePageTitle } from './hooks/useExplorePageTitle';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useSplitSizeUpdater } from './hooks/useSplitSizeUpdater';
@@ -24,6 +28,10 @@ import { isSplit, selectCorrelationDetails, selectPanesEntries } from './state/s
 const MIN_PANE_WIDTH = 200;
 
 export default function ExplorePage(props: GrafanaRouteComponentProps<{}, ExploreQueryParams>) {
+  return <ExplorePageContent {...props} />;
+}
+
+function ExplorePageContent(props: GrafanaRouteComponentProps<{}, ExploreQueryParams>) {
   const styles = useStyles2(getStyles);
   const theme = useTheme2();
   useTimeSrvFix();
@@ -41,12 +49,15 @@ export default function ExplorePage(props: GrafanaRouteComponentProps<{}, Explor
   const panes = useSelector(selectPanesEntries);
   const hasSplit = useSelector(isSplit);
   const correlationDetails = useSelector(selectCorrelationDetails);
+  const { drawerOpened, setDrawerOpened } = useQueriesDrawerContext();
   const showCorrelationEditorBar = config.featureToggles.correlations && (correlationDetails?.editorMode || false);
 
   useEffect(() => {
     //This is needed for breadcrumbs and topnav.
     //We should probably abstract this out at some point
-    chrome.update({ sectionNav: navModel });
+    chrome.update({
+      sectionNav: navModel,
+    });
   }, [chrome, navModel]);
 
   useKeyboardShortcuts();
@@ -57,6 +68,9 @@ export default function ExplorePage(props: GrafanaRouteComponentProps<{}, Explor
         [styles.correlationsEditorIndicator]: showCorrelationEditorBar,
       })}
     >
+      <h1 className="sr-only">
+        <Trans i18nKey="nav.explore.title" />
+      </h1>
       <ExploreActions />
       {showCorrelationEditorBar && <CorrelationEditorModeBar panes={panes} />}
       <SplitPaneWrapper
@@ -70,14 +84,27 @@ export default function ExplorePage(props: GrafanaRouteComponentProps<{}, Explor
         paneStyle={{ overflow: 'auto', display: 'flex', flexDirection: 'column' }}
         onDragFinished={(size) => size && updateSplitSize(size)}
       >
-        {panes.map(([exploreId]) => {
+        {panes.map(([exploreId, pane]) => {
           return (
             <ErrorBoundaryAlert key={exploreId} style="page">
-              <ExplorePaneContainer exploreId={exploreId} />
+              {pane.initialized ? (
+                <ExplorePaneContainer exploreId={exploreId} />
+              ) : (
+                <LoadingPlaceholder text={t('explore.pane.loading-placeholder', 'Loading...')} />
+              )}
             </ErrorBoundaryAlert>
           );
         })}
       </SplitPaneWrapper>
+      {drawerOpened && (
+        <ExploreDrawer>
+          <RichHistoryContainer
+            onClose={() => {
+              setDrawerOpened(false);
+            }}
+          />
+        </ExploreDrawer>
+      )}
     </div>
   );
 }
@@ -90,6 +117,7 @@ const getStyles = (theme: GrafanaTheme2) => {
       minHeight: 0,
       height: '100%',
       position: 'relative',
+      overflow: 'hidden',
     }),
     correlationsEditorIndicator: css({
       borderLeft: `4px solid ${theme.colors.primary.main}`,

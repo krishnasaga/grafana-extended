@@ -13,9 +13,7 @@ import (
 	"github.com/grafana/grafana/pkg/cmd/grafana-cli/logger"
 	"github.com/grafana/grafana/pkg/cmd/grafana-cli/models"
 	"github.com/grafana/grafana/pkg/plugins"
-	"github.com/grafana/grafana/pkg/plugins/manager/loader/finder"
 	"github.com/grafana/grafana/pkg/plugins/manager/sources"
-	"github.com/grafana/grafana/pkg/services/featuremgmt"
 )
 
 var (
@@ -78,9 +76,7 @@ func GetLocalPlugin(pluginDir, pluginID string) (plugins.FoundPlugin, error) {
 }
 
 func GetLocalPlugins(pluginDir string) []*plugins.FoundBundle {
-	f := finder.NewLocalFinder(true, featuremgmt.WithFeatures())
-
-	res, err := f.Find(context.Background(), sources.NewLocalSource(plugins.ClassExternal, []string{pluginDir}))
+	res, err := sources.NewLocalSource(plugins.ClassExternal, []string{pluginDir}).Discover(context.Background())
 	if err != nil {
 		logger.Error("Could not get local plugins", err)
 		return make([]*plugins.FoundBundle, 0)
@@ -89,14 +85,14 @@ func GetLocalPlugins(pluginDir string) []*plugins.FoundBundle {
 	return res
 }
 
-func PluginVersionInstalled(pluginID, version, pluginDir string) bool {
+func PluginVersionInstalled(pluginID, version, pluginDir string) (plugins.FoundPlugin, bool) {
 	for _, bundle := range GetLocalPlugins(pluginDir) {
 		pJSON := bundle.Primary.JSONData
 		if pJSON.ID == pluginID {
 			if pJSON.Info.Version == version {
-				return true
+				return bundle.Primary, true
 			}
 		}
 	}
-	return false
+	return plugins.FoundPlugin{}, false
 }

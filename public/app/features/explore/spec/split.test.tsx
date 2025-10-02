@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React, { ComponentProps } from 'react';
+import { ComponentProps } from 'react';
 import AutoSizer from 'react-virtualized-auto-sizer';
 
 import { EventBusSrv, serializeStateToUrlParam } from '@grafana/data';
@@ -15,6 +15,7 @@ const testEventBus = new EventBusSrv();
 jest.mock('app/core/core', () => {
   return {
     contextSrv: {
+      ...jest.requireActual('app/core/core').contextSrv,
       hasPermission: () => true,
       getValidIntervals: (defaultIntervals: string[]) => defaultIntervals,
     },
@@ -42,6 +43,10 @@ jest.mock('react-virtualized-auto-sizer', () => {
 jest.mock('@grafana/runtime', () => ({
   ...jest.requireActual('@grafana/runtime'),
   getAppEvents: () => testEventBus,
+}));
+
+jest.mock('../hooks/useExplorePageTitle', () => ({
+  useExplorePageTitle: jest.fn(),
 }));
 
 describe('Handles open/close splits and related events in UI and URL', () => {

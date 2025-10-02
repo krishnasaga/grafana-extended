@@ -13,9 +13,13 @@ import * as common from '@grafana/schema';
 export const pluginVersion = "%VERSION%";
 
 export interface TempoQuery extends common.DataQuery {
+  /**
+   * For metric queries, how many exemplars to request, 0 means no exemplars
+   */
+  exemplars?: number;
   filters: Array<TraceqlFilter>;
   /**
-   * Filters that are used to query the metrics summary
+   * deprecated Filters that are used to query the metrics summary
    */
   groupBy?: Array<TraceqlFilter>;
   /**
@@ -26,6 +30,10 @@ export interface TempoQuery extends common.DataQuery {
    * @deprecated Define the maximum duration to select traces. Use duration format, for example: 1.2s, 100ms
    */
   maxDuration?: string;
+  /**
+   * For metric queries, whether to run instant or range queries
+   */
+  metricsQueryType?: MetricsQueryType;
   /**
    * @deprecated Define the minimum duration to select traces. Use duration format, for example: 1.2s, 100ms
    */
@@ -47,6 +55,10 @@ export interface TempoQuery extends common.DataQuery {
    */
   serviceMapQuery?: (string | Array<string>);
   /**
+   * Whether to use native histograms for service map queries
+   */
+  serviceMapUseNativeHistograms?: boolean;
+  /**
    * @deprecated Query traces by service name
    */
   serviceName?: string;
@@ -59,6 +71,10 @@ export interface TempoQuery extends common.DataQuery {
    */
   spss?: number;
   /**
+   * For metric queries, the step size to use
+   */
+  step?: string;
+  /**
    * The type of the table that is used to display the search results
    */
   tableType?: SearchTableType;
@@ -69,10 +85,12 @@ export const defaultTempoQuery: Partial<TempoQuery> = {
   groupBy: [],
 };
 
-/**
- * search = Loki search, nativeSearch = Tempo search for backwards compatibility
- */
-export type TempoQueryType = ('traceql' | 'traceqlSearch' | 'search' | 'serviceMap' | 'upload' | 'nativeSearch' | 'traceId' | 'clear');
+export type TempoQueryType = ('traceql' | 'traceqlSearch' | 'serviceMap' | 'upload' | 'nativeSearch' | 'traceId' | 'clear');
+
+export enum MetricsQueryType {
+  Instant = 'instant',
+  Range = 'range',
+}
 
 /**
  * The state of the TraceQL streaming search query
@@ -88,6 +106,7 @@ export enum SearchStreamingState {
  * The type of the table that is used to display the search results
  */
 export enum SearchTableType {
+  Raw = 'raw',
   Spans = 'spans',
   Traces = 'traces',
 }
@@ -96,7 +115,10 @@ export enum SearchTableType {
  * static fields are pre-set in the UI, dynamic fields are added by the user
  */
 export enum TraceqlSearchScope {
+  Event = 'event',
+  Instrumentation = 'instrumentation',
   Intrinsic = 'intrinsic',
+  Link = 'link',
   Resource = 'resource',
   Span = 'span',
   Unscoped = 'unscoped',
@@ -107,6 +129,10 @@ export interface TraceqlFilter {
    * Uniquely identify the filter, will not be used in the query generation
    */
   id: string;
+  /**
+   * Whether the value is a custom value typed by the user
+   */
+  isCustomValue?: boolean;
   /**
    * The operator that connects the tag to the value, for example: =, >, !=, =~
    */

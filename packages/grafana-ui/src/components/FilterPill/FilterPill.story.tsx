@@ -1,14 +1,14 @@
 import { Meta, StoryFn } from '@storybook/react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 
-import { getAvailableIcons } from '../../types';
-import { HorizontalGroup } from '../Layout/Layout';
+import { getAvailableIcons } from '../../types/icon';
+import { Stack } from '../Layout/Stack/Stack';
 
 import { FilterPill } from './FilterPill';
 import mdx from './FilterPill.mdx';
 
 const meta: Meta<typeof FilterPill> = {
-  title: 'General/FilterPill',
+  title: 'Inputs/FilterPill',
   component: FilterPill,
   argTypes: {
     icon: { control: { type: 'select', options: getAvailableIcons() } },
@@ -30,11 +30,11 @@ export const Example = () => {
   const elements = ['Singapore', 'Paris', 'Stockholm', 'New York', 'London'];
 
   return (
-    <HorizontalGroup>
+    <Stack>
       {elements.map((item) => (
         <FilterPill key={item} label={item} selected={item === selected} onClick={() => setSelected(item)} />
       ))}
-    </HorizontalGroup>
+    </Stack>
   );
 };
 

@@ -2,15 +2,16 @@ package clientmiddleware
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/grafana/grafana-aws-sdk/pkg/awsds"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/plugins"
 	"github.com/grafana/grafana/pkg/services/caching"
 	"github.com/grafana/grafana/pkg/services/contexthandler"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
@@ -19,15 +20,15 @@ import (
 // needed to mock the function for testing
 var shouldCacheQuery = awsds.ShouldCacheQuery
 
-// NewCachingMiddleware creates a new plugins.ClientMiddleware that will
+// NewCachingMiddleware creates a new backend.HandlerMiddleware that will
 // attempt to read and write query results to the cache
-func NewCachingMiddleware(cachingService caching.CachingService) plugins.ClientMiddleware {
+func NewCachingMiddleware(cachingService caching.CachingService) backend.HandlerMiddleware {
 	return NewCachingMiddlewareWithFeatureManager(cachingService, nil)
 }
 
-// NewCachingMiddlewareWithFeatureManager creates a new plugins.ClientMiddleware that will
+// NewCachingMiddlewareWithFeatureManager creates a new backend.HandlerMiddleware that will
 // attempt to read and write query results to the cache with a feature manager
-func NewCachingMiddlewareWithFeatureManager(cachingService caching.CachingService, features featuremgmt.FeatureToggles) plugins.ClientMiddleware {
+func NewCachingMiddlewareWithFeatureManager(cachingService caching.CachingService, features featuremgmt.FeatureToggles) backend.HandlerMiddleware {
 	log := log.New("caching_middleware")
 	if err := prometheus.Register(QueryCachingRequestHistogram); err != nil {
 		log.Error("Error registering prometheus collector 'QueryRequestHistogram'", "error", err)
@@ -35,18 +36,25 @@ func NewCachingMiddlewareWithFeatureManager(cachingService caching.CachingServic
 	if err := prometheus.Register(ResourceCachingRequestHistogram); err != nil {
 		log.Error("Error registering prometheus collector 'ResourceRequestHistogram'", "error", err)
 	}
-	return plugins.ClientMiddlewareFunc(func(next plugins.Client) plugins.Client {
-		return &CachingMiddleware{
-			next:     next,
-			caching:  cachingService,
-			log:      log,
-			features: features,
+	cachingMiddlewareHandler := func(next backend.Handler) backend.Handler {
+		cachingMiddleware := &CachingMiddleware{
+			BaseHandler: backend.NewBaseHandler(next),
+			caching:     cachingService,
+			log:         log,
+			features:    features,
 		}
-	})
+		if features != nil && features.IsEnabled(context.Background(), featuremgmt.FlagQueryCacheRequestDeduplication) {
+			return newRequestDeduplicationMiddleware(log, cachingMiddleware)
+		}
+		return cachingMiddleware
+	}
+
+	return backend.HandlerMiddlewareFunc(cachingMiddlewareHandler)
 }
 
 type CachingMiddleware struct {
-	next     plugins.Client
+	backend.BaseHandler
+
 	caching  caching.CachingService
 	log      log.Logger
 	features featuremgmt.FeatureToggles
@@ -57,12 +65,12 @@ type CachingMiddleware struct {
 // If the cache service is implemented, we capture the request duration as a metric. The service is expected to write any response headers.
 func (m *CachingMiddleware) QueryData(ctx context.Context, req *backend.QueryDataRequest) (*backend.QueryDataResponse, error) {
 	if req == nil {
-		return m.next.QueryData(ctx, req)
+		return m.BaseHandler.QueryData(ctx, req)
 	}
 
 	reqCtx := contexthandler.FromContext(ctx)
 	if reqCtx == nil {
-		return m.next.QueryData(ctx, req)
+		return m.BaseHandler.QueryData(ctx, req)
 	}
 
 	// time how long this request takes
@@ -89,7 +97,7 @@ func (m *CachingMiddleware) QueryData(ctx context.Context, req *backend.QueryDat
 	}
 
 	// Cache miss; do the actual queries
-	resp, err := m.next.QueryData(ctx, req)
+	resp, err := m.BaseHandler.QueryData(ctx, req)
 
 	// Update the query cache with the result for this metrics request
 	if err == nil && cr.UpdateCacheFn != nil {
@@ -122,12 +130,12 @@ func (m *CachingMiddleware) QueryData(ctx context.Context, req *backend.QueryDat
 // If the cache service is implemented, we capture the request duration as a metric. The service is expected to write any response headers.
 func (m *CachingMiddleware) CallResource(ctx context.Context, req *backend.CallResourceRequest, sender backend.CallResourceResponseSender) error {
 	if req == nil {
-		return m.next.CallResource(ctx, req, sender)
+		return m.BaseHandler.CallResource(ctx, req, sender)
 	}
 
 	reqCtx := contexthandler.FromContext(ctx)
 	if reqCtx == nil {
-		return m.next.CallResource(ctx, req, sender)
+		return m.BaseHandler.CallResource(ctx, req, sender)
 	}
 
 	// time how long this request takes
@@ -154,33 +162,62 @@ func (m *CachingMiddleware) CallResource(ctx context.Context, req *backend.CallR
 	// Cache miss; do the actual request
 	// If there is no update cache func, just pass in the original sender
 	if cr.UpdateCacheFn == nil {
-		return m.next.CallResource(ctx, req, sender)
+		return m.BaseHandler.CallResource(ctx, req, sender)
 	}
 	// Otherwise, intercept the responses in a wrapped sender so we can cache them first
-	cacheSender := callResourceResponseSenderFunc(func(res *backend.CallResourceResponse) error {
+	cacheSender := backend.CallResourceResponseSenderFunc(func(res *backend.CallResourceResponse) error {
 		cr.UpdateCacheFn(ctx, res)
 		return sender.Send(res)
 	})
 
-	return m.next.CallResource(ctx, req, cacheSender)
+	return m.BaseHandler.CallResource(ctx, req, cacheSender)
 }
 
-func (m *CachingMiddleware) CheckHealth(ctx context.Context, req *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
-	return m.next.CheckHealth(ctx, req)
+// Given N requests happening at the same time and issuing the same query, only one request will execute
+// and the other ones will wait for the response received by the request being executed.
+type requestDeduplicationMiddleware struct {
+	backend.BaseHandler
+	log          *log.ConcreteLogger
+	singleflight *singleflight.Group
 }
 
-func (m *CachingMiddleware) CollectMetrics(ctx context.Context, req *backend.CollectMetricsRequest) (*backend.CollectMetricsResult, error) {
-	return m.next.CollectMetrics(ctx, req)
+func newRequestDeduplicationMiddleware(log *log.ConcreteLogger, next backend.Handler) *requestDeduplicationMiddleware {
+	return &requestDeduplicationMiddleware{log: log, BaseHandler: backend.NewBaseHandler(next), singleflight: &singleflight.Group{}}
 }
 
-func (m *CachingMiddleware) SubscribeStream(ctx context.Context, req *backend.SubscribeStreamRequest) (*backend.SubscribeStreamResponse, error) {
-	return m.next.SubscribeStream(ctx, req)
+func (m *requestDeduplicationMiddleware) QueryData(ctx context.Context, req *backend.QueryDataRequest) (*backend.QueryDataResponse, error) {
+	if req.PluginContext.DataSourceInstanceSettings == nil || req.PluginContext.DataSourceInstanceSettings.UID == "" {
+		return m.BaseHandler.QueryData(ctx, req)
+	}
+	key, err := caching.GetKey(req.PluginContext.DataSourceInstanceSettings.UID, req)
+	if err != nil {
+		m.log.Error("error building cache key for request deduplication, skipping request deduplication", "error", err)
+		return m.BaseHandler.QueryData(ctx, req)
+	}
+	v, err, _ := m.singleflight.Do(key, func() (interface{}, error) {
+		return m.BaseHandler.QueryData(ctx, req)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("request deduplication middleware: calling BaseHandler.QueryData: %w", err)
+	}
+	return v.(*backend.QueryDataResponse), nil
 }
 
-func (m *CachingMiddleware) PublishStream(ctx context.Context, req *backend.PublishStreamRequest) (*backend.PublishStreamResponse, error) {
-	return m.next.PublishStream(ctx, req)
-}
+func (m *requestDeduplicationMiddleware) CallResource(ctx context.Context, req *backend.CallResourceRequest, sender backend.CallResourceResponseSender) error {
+	if req.PluginContext.DataSourceInstanceSettings == nil || req.PluginContext.DataSourceInstanceSettings.UID == "" {
+		return m.BaseHandler.CallResource(ctx, req, sender)
+	}
 
-func (m *CachingMiddleware) RunStream(ctx context.Context, req *backend.RunStreamRequest, sender *backend.StreamSender) error {
-	return m.next.RunStream(ctx, req, sender)
+	key, err := caching.GetKey(req.PluginContext.DataSourceInstanceSettings.UID, req)
+	if err != nil {
+		m.log.Error("error building cache key for request deduplication, skipping request deduplication", "error", err)
+		return m.BaseHandler.CallResource(ctx, req, sender)
+	}
+	_, err, _ = m.singleflight.Do(key, func() (interface{}, error) {
+		return nil, m.BaseHandler.CallResource(ctx, req, sender)
+	})
+	if err != nil {
+		return fmt.Errorf("request deduplication middleware: calling BaseHandler.CallResource: %w", err)
+	}
+	return nil
 }

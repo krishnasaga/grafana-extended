@@ -1,12 +1,12 @@
 import { css } from '@emotion/css';
 import { get as lodashGet } from 'lodash';
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useObservable } from 'react-use';
 
 import { DataFrame, GrafanaTheme2, PanelOptionsEditorBuilder, StandardEditorContext } from '@grafana/data';
-import { PanelOptionsSupplier } from '@grafana/data/src/panel/PanelPlugin';
-import { NestedValueAccess } from '@grafana/data/src/utils/OptionsUIBuilders';
-import { useStyles2 } from '@grafana/ui/src';
+import { NestedValueAccess, PanelOptionsSupplier } from '@grafana/data/internal';
+import { Trans, t } from '@grafana/i18n';
+import { useStyles2 } from '@grafana/ui';
 import { AddLayerButton } from 'app/core/components/Layers/AddLayerButton';
 import { FrameState } from 'app/features/canvas/runtime/frame';
 import { OptionsPaneCategory } from 'app/features/dashboard/components/PanelEditor/OptionsPaneCategory';
@@ -16,6 +16,7 @@ import { setOptionImmutably } from 'app/features/dashboard/components/PanelEdito
 
 import { activePanelSubject, InstanceState } from '../../CanvasPanel';
 import { addStandardCanvasEditorOptions } from '../../module';
+import { Options } from '../../panelcfg.gen';
 import { InlineEditTabs } from '../../types';
 import { getElementTypes, onAddItem } from '../../utils';
 import { getConnectionEditor } from '../connectionEditor';
@@ -34,11 +35,11 @@ export function InlineEditBody() {
   const pane = useMemo(() => {
     const p = activePanel?.panel;
     const state: InstanceState = instanceState;
-    if (!state || !p) {
+    if (!(state && state.scene) || !p) {
       return new OptionsPaneCategoryDescriptor({ id: 'root', title: 'root' });
     }
 
-    const supplier = (builder: PanelOptionsEditorBuilder<any>) => {
+    const supplier = (builder: PanelOptionsEditorBuilder<Options>) => {
       if (activeTab === InlineEditTabs.ElementManagement) {
         builder.addNestedOptions(getLayerEditor(instanceState));
       }
@@ -60,7 +61,11 @@ export function InlineEditBody() {
         if (element && !(element instanceof FrameState)) {
           builder.addNestedOptions(
             getElementEditor({
-              category: [`Selected element (${element.options.name})`],
+              category: [
+                t('canvas.inline-edit-body.category-selected-element', 'Selected element ({{element}})', {
+                  element: element.options.name,
+                }),
+              ],
               element,
               scene: state.scene,
             })
@@ -103,12 +108,20 @@ export function InlineEditBody() {
     <>
       <div style={topLevelItemsContainerStyle}>{pane.items.map((item) => item.render())}</div>
       <div style={topLevelItemsContainerStyle}>
-        <AddLayerButton onChange={(sel) => onAddItem(sel, rootLayer)} options={typeOptions} label={'Add item'} />
+        <AddLayerButton
+          onChange={(sel) => onAddItem(sel, rootLayer)}
+          options={typeOptions}
+          label={t('canvas.inline-edit-body.label-add-item', 'Add item')}
+        />
       </div>
       <div style={topLevelItemsContainerStyle}>
         <TabsEditor onTabChange={onTabChange} />
         {pane.categories.map((p) => renderOptionsPaneCategoryDescriptor(p))}
-        {noElementSelected && <div className={styles.selectElement}>Please select an element</div>}
+        {noElementSelected && (
+          <div className={styles.selectElement}>
+            <Trans i18nKey="canvas.inline-edit-body.please-select-an-element">Please select an element</Trans>
+          </div>
+        )}
       </div>
     </>
   );
@@ -130,7 +143,7 @@ interface EditorProps<T> {
   data?: DataFrame[];
 }
 
-function getOptionsPaneCategoryDescriptor<T = any>(
+function getOptionsPaneCategoryDescriptor<T extends object>(
   props: EditorProps<T>,
   supplier: PanelOptionsSupplier<T>
 ): OptionsPaneCategoryDescriptor {
@@ -156,12 +169,12 @@ function getOptionsPaneCategoryDescriptor<T = any>(
   const access: NestedValueAccess = {
     getValue: (path) => lodashGet(props.options, path),
     onChange: (path, value) => {
-      props.onChange(setOptionImmutably(props.options as any, path, value));
+      props.onChange(setOptionImmutably<T>(props.options, path, value));
     },
   };
 
   // Use the panel options loader
-  fillOptionsPaneItems(supplier, access, getOptionsPaneCategory, context);
+  fillOptionsPaneItems('canvas-inline', supplier, access, getOptionsPaneCategory, context);
   return root;
 }
 

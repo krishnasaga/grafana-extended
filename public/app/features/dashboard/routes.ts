@@ -1,10 +1,11 @@
+import { DashboardRoutes } from 'app/types/dashboard';
+
 import { SafeDynamicImport } from '../../core/components/DynamicImports/SafeDynamicImport';
 import { config } from '../../core/config';
 import { RouteDescriptor } from '../../core/navigation/types';
-import { DashboardRoutes } from '../../types';
 
 export const getPublicDashboardRoutes = (): RouteDescriptor[] => {
-  if (!config.publicDashboardsEnabled || !config.featureToggles.publicDashboards) {
+  if (!config.publicDashboardsEnabled) {
     return [];
   }
 
@@ -28,7 +29,7 @@ export const getPublicDashboardRoutes = (): RouteDescriptor[] => {
       component: SafeDynamicImport(
         () =>
           import(
-            /* webpackChunkName: "PublicDashboardPage" */ '../../features/dashboard/containers/PublicDashboardPage'
+            /* webpackChunkName: "PublicDashboardPage" */ '../../features/dashboard/containers/PublicDashboardPageProxy'
           )
       ),
     },

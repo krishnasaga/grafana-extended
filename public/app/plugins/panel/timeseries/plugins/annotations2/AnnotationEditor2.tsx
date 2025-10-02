@@ -1,11 +1,14 @@
 import { css } from '@emotion/css';
-import React, { useRef } from 'react';
+import { useRef } from 'react';
+import { Controller } from 'react-hook-form';
 import { useAsyncFn, useClickAway } from 'react-use';
 
 import { AnnotationEventUIModel, GrafanaTheme2, dateTimeFormat, systemDateFormats } from '@grafana/data';
-import { Button, Field, Form, HorizontalGroup, InputControl, TextArea, usePanelContext, useStyles2 } from '@grafana/ui';
+import { Trans, t } from '@grafana/i18n';
+import { Button, Field, Stack, TextArea, usePanelContext, useStyles2 } from '@grafana/ui';
+import { Form } from 'app/core/components/Form/Form';
 import { TagFilter } from 'app/core/components/TagFilter/TagFilter';
-import { getAnnotationTags } from 'app/features/annotations/api';
+import { annotationServer } from 'app/features/annotations/api';
 
 interface Props {
   annoVals: Record<string, any[]>;
@@ -67,10 +70,14 @@ export const AnnotationEditor2 = ({ annoVals, annoIdx, dismiss, timeZone, ...oth
   return (
     <div ref={clickAwayRef} className={styles.editor} {...otherProps}>
       <div className={styles.header}>
-        <HorizontalGroup justify={'space-between'} align={'center'}>
-          <div>{isUpdatingAnnotation ? 'Edit annotation' : 'Add annotation'}</div>
+        <Stack justifyContent={'space-between'} alignItems={'center'}>
+          <div>
+            {isUpdatingAnnotation
+              ? t('timeseries.annotation-editor2.edit-annotation', 'Edit annotation')
+              : t('timeseries.annotation-editor2.add-annotation', 'Add annotation')}
+          </div>
           <div>{time}</div>
-        </HorizontalGroup>
+        </Stack>
       </div>
       <Form<AnnotationEditFormDTO>
         onSubmit={onSubmit}
@@ -80,7 +87,11 @@ export const AnnotationEditor2 = ({ annoVals, annoIdx, dismiss, timeZone, ...oth
           return (
             <>
               <div className={styles.content}>
-                <Field label={'Description'} invalid={!!errors.description} error={errors?.description?.message}>
+                <Field
+                  label={t('timeseries.annotation-editor2.label-description', 'Description')}
+                  invalid={!!errors.description}
+                  error={errors?.description?.message}
+                >
                   <TextArea
                     className={styles.textarea}
                     {...register('description', {
@@ -88,17 +99,17 @@ export const AnnotationEditor2 = ({ annoVals, annoIdx, dismiss, timeZone, ...oth
                     })}
                   />
                 </Field>
-                <Field label={'Tags'}>
-                  <InputControl
+                <Field label={t('timeseries.annotation-editor2.label-tags', 'Tags')}>
+                  <Controller
                     control={control}
                     name="tags"
                     render={({ field: { ref, onChange, ...field } }) => {
                       return (
                         <TagFilter
                           allowCustomValue
-                          placeholder="Add tags"
+                          placeholder={t('timeseries.annotation-editor2.placeholder-add-tags', 'Add tags')}
                           onChange={onChange}
-                          tagOptions={getAnnotationTags}
+                          tagOptions={annotationServer().tags}
                           tags={field.value}
                         />
                       );
@@ -107,14 +118,16 @@ export const AnnotationEditor2 = ({ annoVals, annoIdx, dismiss, timeZone, ...oth
                 </Field>
               </div>
               <div className={styles.footer}>
-                <HorizontalGroup justify={'flex-end'}>
+                <Stack justifyContent={'flex-end'}>
                   <Button size={'sm'} variant="secondary" onClick={dismiss} fill="outline">
-                    Cancel
+                    <Trans i18nKey="timeseries.annotation-editor2.cancel">Cancel</Trans>
                   </Button>
                   <Button size={'sm'} type={'submit'} disabled={stateIndicator?.loading}>
-                    {stateIndicator?.loading ? 'Saving' : 'Save'}
+                    {stateIndicator?.loading
+                      ? t('timeseries.annotation-editor2.saving', 'Saving')
+                      : t('timeseries.annotation-editor2.save', 'Save')}
                   </Button>
-                </HorizontalGroup>
+                </Stack>
               </div>
             </>
           );
@@ -127,8 +140,7 @@ export const AnnotationEditor2 = ({ annoVals, annoIdx, dismiss, timeZone, ...oth
 const getStyles = (theme: GrafanaTheme2) => {
   return {
     editor: css({
-      // zIndex: theme.zIndex.tooltip,
-      background: theme.colors.background.primary,
+      background: theme.colors.background.elevated,
       border: `1px solid ${theme.colors.border.weak}`,
       borderRadius: theme.shape.radius.default,
       boxShadow: theme.shadows.z3,

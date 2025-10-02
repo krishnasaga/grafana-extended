@@ -7,7 +7,7 @@ import config from 'app/core/config';
 import { backendSrv } from 'app/core/services/backend_srv'; // will use the version in __mocks__
 
 import InfluxQueryModel from './influx_query_model';
-import { getMockDSInstanceSettings, getMockInfluxDS } from './mocks';
+import { getMockDSInstanceSettings, getMockInfluxDS } from './mocks/datasource';
 import ResponseParser, { getSelectedParams } from './response_parser';
 import { InfluxQuery } from './types';
 

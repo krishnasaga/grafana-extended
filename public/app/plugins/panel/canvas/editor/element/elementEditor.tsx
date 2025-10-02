@@ -1,12 +1,13 @@
 import { get as lodashGet } from 'lodash';
 
-import { NestedPanelOptions, NestedValueAccess } from '@grafana/data/src/utils/OptionsUIBuilders';
+import { NestedPanelOptions, NestedValueAccess } from '@grafana/data/internal';
+import { t } from '@grafana/i18n';
+import { CanvasElementOptions } from 'app/features/canvas/element';
 import {
-  CanvasElementOptions,
   canvasElementRegistry,
   DEFAULT_CANVAS_ELEMENT_CONFIG,
   defaultElementItems,
-} from 'app/features/canvas';
+} from 'app/features/canvas/registry';
 import { ElementState } from 'app/features/canvas/runtime/element';
 import { FrameState } from 'app/features/canvas/runtime/frame';
 import { Scene } from 'app/features/canvas/runtime/scene';
@@ -71,12 +72,16 @@ export function getElementEditor(opts: CanvasEditorOptions): NestedPanelOptions<
 
       builder.addSelect({
         path: 'type',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/consistent-type-assertions
         name: undefined as any, // required, but hide space
         settings: {
           options: layerTypes,
         },
         description: isUnsupported
-          ? 'Selected element type is not supported by current settings. Please enable advanced element types.'
+          ? t(
+              'canvas.element-editor.description-unsupported',
+              'Selected element type is not supported by current settings. Please enable advanced element types.'
+            )
           : '',
       });
 
@@ -99,10 +104,10 @@ export function getElementEditor(opts: CanvasEditorOptions): NestedPanelOptions<
       const shouldAddLayoutEditor = opts.element.item.standardEditorConfig?.layout ?? true;
       if (shouldAddLayoutEditor) {
         builder.addCustomEditor({
-          category: ['Layout'],
+          category: [t('canvas.element-editor.category-layout', 'Layout')],
           id: 'content',
           path: '__', // not used
-          name: 'Quick placement',
+          name: t('canvas.element-editor.name-quick-placement', 'Quick placement'),
           editor: PlacementEditor,
           settings: opts,
         });
@@ -117,6 +122,9 @@ export function getElementEditor(opts: CanvasEditorOptions): NestedPanelOptions<
       if (shouldAddBorderEditor) {
         optionBuilder.addBorder(builder, ctx);
       }
+
+      optionBuilder.addDataLinks(builder, ctx);
+      optionBuilder.addActions(builder, ctx);
     },
   };
 }

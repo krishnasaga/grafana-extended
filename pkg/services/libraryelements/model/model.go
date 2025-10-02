@@ -20,12 +20,13 @@ type LibraryElement struct {
 	OrgID int64 `xorm:"org_id"`
 	// Deprecated: use FolderUID instead
 	FolderID    int64  `xorm:"folder_id"`
+	FolderUID   string `xorm:"folder_uid"`
 	UID         string `xorm:"uid"`
 	Name        string
 	Kind        int64
 	Type        string
 	Description string
-	Model       json.RawMessage
+	Model       json.RawMessage `xorm:"TEXT"` // Column is defined as TEXT in `library_element`.
 	Version     int64
 
 	Created time.Time
@@ -41,6 +42,7 @@ type LibraryElementWithMeta struct {
 	OrgID int64 `xorm:"org_id"`
 	// Deprecated: use FolderUID instead
 	FolderID    int64  `xorm:"folder_id"`
+	FolderUID   string `xorm:"folder_uid"`
 	UID         string `xorm:"uid"`
 	Name        string
 	Kind        int64
@@ -53,7 +55,6 @@ type LibraryElementWithMeta struct {
 	Updated time.Time
 
 	FolderName          string
-	FolderUID           string `xorm:"folder_uid"`
 	ConnectedDashboards int64
 	CreatedBy           int64
 	UpdatedBy           int64
@@ -127,6 +128,7 @@ type LibraryElementConnectionWithMeta struct {
 
 // LibraryElementConnectionDTO is the frontend DTO for element connections.
 type LibraryElementConnectionDTO struct {
+	// Deprecated: this field will be removed in the future
 	ID            int64                                  `json:"id"`
 	Kind          int64                                  `json:"kind"`
 	ElementID     int64                                  `json:"elementId"`
@@ -176,8 +178,7 @@ type CreateLibraryElementCommand struct {
 	// Kind of element to create, Use 1 for library panels or 2 for c.
 	// Description:
 	// * 1 - library panels
-	// * 2 - library variables
-	// Enum: 1,2
+	// Enum: 1
 	Kind int64 `json:"kind" binding:"Required"`
 	// required: false
 	UID string `json:"uid"`
@@ -198,8 +199,7 @@ type PatchLibraryElementCommand struct {
 	// Kind of element to create, Use 1 for library panels or 2 for c.
 	// Description:
 	// * 1 - library panels
-	// * 2 - library variables
-	// Enum: 1,2
+	// Enum: 1
 	Kind int64 `json:"kind" binding:"Required"`
 	// Version of the library element you are updating.
 	Version int64 `json:"version" binding:"Required"`
@@ -213,17 +213,19 @@ type GetLibraryElementCommand struct {
 	// Deprecated: use FolderUID instead
 	FolderID int64
 	UID      string
+	Name     string
 }
 
 // SearchLibraryElementsQuery is the query used for searching for Elements
 type SearchLibraryElementsQuery struct {
-	PerPage          int
-	Page             int
-	SearchString     string
-	SortDirection    string
-	Kind             int
-	TypeFilter       string
-	ExcludeUID       string
+	PerPage       int
+	Page          int
+	SearchString  string
+	SortDirection string
+	Kind          int
+	TypeFilter    string
+	ExcludeUID    string
+	// Deprecated: use FolderFilterUIDs instead
 	FolderFilter     string
 	FolderFilterUIDs string
 }
@@ -260,8 +262,7 @@ type LibraryElementKind int
 const (
 	// PanelElement is used for library elements that are of the Panel kind
 	PanelElement LibraryElementKind = iota + 1
-	// VariableElement is used for library elements that are of the Variable kind
-	VariableElement
 )
 
+const LibraryElementTableName = "library_element"
 const LibraryElementConnectionTableName = "library_element_connection"

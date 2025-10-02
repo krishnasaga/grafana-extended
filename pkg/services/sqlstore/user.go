@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/grafana/pkg/events"
 	"github.com/grafana/grafana/pkg/services/org"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/util"
@@ -16,7 +15,7 @@ import (
 const mainOrgName = "Main Org."
 
 func (ss *SQLStore) getOrgIDForNewUser(sess *DBSession, args user.CreateUserCommand) (int64, error) {
-	if ss.Cfg.AutoAssignOrg && args.OrgID != 0 {
+	if ss.cfg.AutoAssignOrg && args.OrgID != 0 {
 		if err := verifyExistingOrg(sess, args.OrgID); err != nil {
 			return -1, err
 		}
@@ -50,12 +49,9 @@ func (ss *SQLStore) createUser(ctx context.Context, sess *DBSession, args user.C
 		args.Email = args.Login
 	}
 
-	where := "email=? OR login=?"
-	if ss.Cfg.CaseInsensitiveLogin {
-		where = "LOWER(email)=LOWER(?) OR LOWER(login)=LOWER(?)"
-		args.Login = strings.ToLower(args.Login)
-		args.Email = strings.ToLower(args.Email)
-	}
+	where := "LOWER(email)=LOWER(?) OR LOWER(login)=LOWER(?)"
+	args.Login = strings.ToLower(args.Login)
+	args.Email = strings.ToLower(args.Email)
 
 	exists, err := sess.Where(where, args.Email, args.Login).Get(&user.User{})
 	if err != nil {
@@ -67,6 +63,7 @@ func (ss *SQLStore) createUser(ctx context.Context, sess *DBSession, args user.C
 
 	// create user
 	usr = user.User{
+		UID:        util.GenerateShortUID(),
 		Email:      args.Email,
 		Login:      args.Login,
 		IsAdmin:    args.IsAdmin,
@@ -101,14 +98,6 @@ func (ss *SQLStore) createUser(ctx context.Context, sess *DBSession, args user.C
 		return usr, err
 	}
 
-	sess.publishAfterCommit(&events.UserCreated{
-		Timestamp: usr.Created,
-		Id:        usr.ID,
-		Name:      usr.Name,
-		Login:     usr.Login,
-		Email:     usr.Email,
-	})
-
 	orgUser := org.OrgUser{
 		OrgID:   orgID,
 		UserID:  usr.ID,
@@ -117,11 +106,11 @@ func (ss *SQLStore) createUser(ctx context.Context, sess *DBSession, args user.C
 		Updated: time.Now(),
 	}
 
-	if ss.Cfg.AutoAssignOrg && !usr.IsAdmin {
+	if ss.cfg.AutoAssignOrg && !usr.IsAdmin {
 		if len(args.DefaultOrgRole) > 0 {
 			orgUser.Role = org.RoleType(args.DefaultOrgRole)
 		} else {
-			orgUser.Role = org.RoleType(ss.Cfg.AutoAssignOrgRole)
+			orgUser.Role = org.RoleType(ss.cfg.AutoAssignOrgRole)
 		}
 	}
 
@@ -147,8 +136,8 @@ func verifyExistingOrg(sess *DBSession, orgId int64) error {
 func (ss *SQLStore) getOrCreateOrg(sess *DBSession, orgName string) (int64, error) {
 	var org org.Org
 
-	if ss.Cfg.AutoAssignOrg {
-		has, err := sess.Where("id=?", ss.Cfg.AutoAssignOrgId).Get(&org)
+	if ss.cfg.AutoAssignOrg {
+		has, err := sess.Where("id=?", ss.cfg.AutoAssignOrgId).Get(&org)
 		if err != nil {
 			return 0, err
 		}
@@ -157,18 +146,18 @@ func (ss *SQLStore) getOrCreateOrg(sess *DBSession, orgName string) (int64, erro
 		}
 		ss.log.Debug("auto assigned organization not found")
 
-		if ss.Cfg.AutoAssignOrgId != 1 {
+		if ss.cfg.AutoAssignOrgId != 1 {
 			ss.log.Error("Could not create user: organization ID does not exist", "orgID",
-				ss.Cfg.AutoAssignOrgId)
+				ss.cfg.AutoAssignOrgId)
 			return 0, fmt.Errorf("could not create user: organization ID %d does not exist",
-				ss.Cfg.AutoAssignOrgId)
+				ss.cfg.AutoAssignOrgId)
 		}
 
 		org.Name = mainOrgName
 		org.Created = time.Now()
 		org.Updated = org.Created
-		org.ID = int64(ss.Cfg.AutoAssignOrgId)
-		if err := sess.InsertId(&org, ss.Dialect); err != nil {
+		org.ID = int64(ss.cfg.AutoAssignOrgId)
+		if err := sess.InsertId(&org, ss.dialect); err != nil {
 			ss.log.Error("failed to insert organization with provided id", "org_id", org.ID, "err", err)
 			// ignore failure if for some reason the organization exists
 			if ss.GetDialect().IsUniqueConstraintViolation(err) {
@@ -184,12 +173,6 @@ func (ss *SQLStore) getOrCreateOrg(sess *DBSession, orgName string) (int64, erro
 			return 0, err
 		}
 	}
-
-	sess.publishAfterCommit(&events.OrgCreated{
-		Timestamp: org.Created,
-		Id:        org.ID,
-		Name:      org.Name,
-	})
 
 	return org.ID, nil
 }

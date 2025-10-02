@@ -1,8 +1,7 @@
 ﻿import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 
-import { Button } from '../Button';
+import { Button, LinkButton } from '../Button/Button';
 
 import { Toggletip } from './Toggletip';
 
@@ -76,7 +75,7 @@ describe('Toggletip', () => {
     const button = screen.getByTestId('myButton');
     await userEvent.click(button);
 
-    expect(await screen.queryByTestId('toggletip-content')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('toggletip-content')).not.toBeInTheDocument();
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
@@ -233,5 +232,31 @@ describe('Toggletip', () => {
 
       expect(afterButton).toHaveFocus();
     });
+  });
+
+  it(`should render LinkButtons correctly with no additional styles`, () => {
+    const identicalProps = {
+      children: 'Click me!',
+      href: 'https://grafana.com',
+    };
+
+    const outsideLinkButton = <LinkButton {...identicalProps} data-testid="outside" />;
+    const insideLinkButton = <LinkButton {...identicalProps} data-testid="inside" />;
+
+    render(
+      <>
+        <Toggletip placement="auto" content={insideLinkButton} show>
+          <Button type="button" data-testid="myButton">
+            Click me!
+          </Button>
+        </Toggletip>
+        {outsideLinkButton}
+      </>
+    );
+
+    const outsideButton = screen.getByTestId('outside');
+    const insideButton = screen.getByTestId('inside');
+
+    expect(getComputedStyle(outsideButton).cssText).toStrictEqual(getComputedStyle(insideButton).cssText);
   });
 });

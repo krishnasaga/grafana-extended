@@ -1,9 +1,8 @@
 import { css, cx } from '@emotion/css';
-import React from 'react';
 
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
+import { Trans, t } from '@grafana/i18n';
 import { Spinner, TimeRangeLabel, useStyles2 } from '@grafana/ui';
-import { Trans, t } from 'app/core/internationalization';
 
 export interface Props {
   timeRange: TimeRange;
@@ -66,12 +65,12 @@ const getStyles = (theme: GrafanaTheme2) => {
     summaryWrapper: css({
       display: 'flex',
     }),
-    summary: css`
-      label: collapsedText;
-      margin-left: ${theme.spacing.gridSize * 2}px;
-      font-size: ${theme.typography.bodySmall.fontSize};
-      color: ${theme.colors.text.secondary};
-    `,
+    summary: css({
+      label: 'collapsedText',
+      marginLeft: `${theme.spacing.gridSize * 2}px`,
+      fontSize: theme.typography.bodySmall.fontSize,
+      color: theme.colors.text.secondary,
+    }),
     timeRange: css({
       display: 'inline-block',
     }),

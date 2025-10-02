@@ -1,15 +1,14 @@
-import React, { PureComponent } from 'react';
+import { PureComponent } from 'react';
 import { connect, ConnectedProps } from 'react-redux';
 
-import { DataSourceInstanceSettings, getDataSourceRef } from '@grafana/data';
+import { AdHocVariableModel, DataSourceInstanceSettings, getDataSourceRef } from '@grafana/data';
 import { AdHocVariableForm } from 'app/features/dashboard-scene/settings/variables/components/AdHocVariableForm';
-import { StoreState } from 'app/types';
+import { StoreState } from 'app/types/store';
 
 import { initialVariableEditorState } from '../editor/reducer';
 import { getAdhocVariableEditorState } from '../editor/selectors';
 import { VariableEditorProps } from '../editor/types';
 import { getVariablesState } from '../state/selectors';
-import { AdHocVariableModel } from '../types';
 import { toKeyedVariableIdentifier } from '../utils';
 
 import { changeVariableDatasource } from './actions';
@@ -62,6 +61,7 @@ export class AdHocVariableEditorUnConnected extends PureComponent<Props> {
         datasource={variable.datasource ?? undefined}
         onDataSourceChange={this.onDatasourceChanged}
         infoText={extended?.infoText}
+        datasourceSupported={variable.datasource === undefined ? false : true} // legacy behavior - will show data source settings even if not supported
       />
     );
   }

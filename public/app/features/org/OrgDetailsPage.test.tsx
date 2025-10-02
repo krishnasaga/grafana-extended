@@ -1,14 +1,12 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 import { mockToolkitActionCreator } from 'test/core/redux/mocks';
 import { TestProvider } from 'test/helpers/TestProvider';
 
 import { NavModel } from '@grafana/data';
-import { ModalManager } from 'app/core/services/ModalManager';
+import { Organization } from 'app/types/organization';
 
 import { backendSrv } from '../../core/services/backend_srv';
-import { Organization } from '../../types';
 
 import { OrgDetailsPage, Props } from './OrgDetailsPage';
 import { setOrganizationName } from './state/reducers';
@@ -17,6 +15,7 @@ jest.mock('app/core/core', () => {
   return {
     ...jest.requireActual('app/core/core'),
     contextSrv: {
+      ...jest.requireActual('app/core/core').contextSrv,
       hasPermission: () => true,
     },
   };
@@ -54,6 +53,12 @@ const setup = (propOverrides?: object) => {
   );
 };
 
+jest.mock('app/features/dashboard/api/dashboard_api', () => ({
+  getDashboardAPI: () => ({
+    getDashboardDTO: jest.fn().mockResolvedValue({}),
+  }),
+}));
+
 describe('Render', () => {
   beforeEach(() => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -81,7 +86,6 @@ describe('Render', () => {
   });
 
   it('should show a modal when submitting', async () => {
-    new ModalManager().init();
     setup({
       organization: {
         name: 'Cool org',

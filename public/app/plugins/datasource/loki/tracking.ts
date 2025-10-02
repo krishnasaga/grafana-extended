@@ -1,5 +1,5 @@
 import { CoreApp, DashboardLoadedEvent, DataQueryRequest, DataQueryResponse } from '@grafana/data';
-import { QueryEditorMode } from '@grafana/experimental';
+import { QueryEditorMode } from '@grafana/plugin-ui';
 import { reportInteraction, config } from '@grafana/runtime';
 
 import {
@@ -7,6 +7,7 @@ import {
   REF_ID_DATA_SAMPLES,
   REF_ID_STARTER_LOG_ROW_CONTEXT,
   REF_ID_STARTER_LOG_VOLUME,
+  REF_ID_STARTER_LOG_SAMPLE,
 } from './datasource';
 import pluginJson from './plugin.json';
 import { getNormalizedLokiQuery, isLogsQuery, obfuscate } from './queryUtils';
@@ -50,10 +51,6 @@ type LokiOnDashboardLoadedTrackingEvent = {
 
   /* The number of Loki queries with changed legend present in the dashboard*/
   queries_with_changed_legend_count: number;
-};
-
-export type LokiTrackingSettings = {
-  predefinedOperations?: string;
 };
 
 export const onDashboardLoadedHandler = ({
@@ -127,9 +124,15 @@ const isQueryWithChangedLegend = (query: LokiQuery): boolean => {
 };
 
 const shouldNotReportBasedOnRefId = (refId: string): boolean => {
-  const starters = [REF_ID_STARTER_ANNOTATION, REF_ID_STARTER_LOG_ROW_CONTEXT, REF_ID_STARTER_LOG_VOLUME];
+  const starters = [
+    REF_ID_STARTER_ANNOTATION,
+    REF_ID_STARTER_LOG_ROW_CONTEXT,
+    REF_ID_STARTER_LOG_VOLUME,
+    REF_ID_STARTER_LOG_SAMPLE,
+    REF_ID_DATA_SAMPLES,
+  ];
 
-  if (refId === REF_ID_DATA_SAMPLES || starters.some((starter) => refId.startsWith(starter))) {
+  if (starters.some((starter) => refId.startsWith(starter))) {
     return true;
   }
   return false;
@@ -151,13 +154,12 @@ export function trackQuery(
   response: DataQueryResponse,
   request: DataQueryRequest<LokiQuery>,
   startTime: Date,
-  trackingSettings: LokiTrackingSettings = {},
   extraPayload: Record<string, unknown> = {}
 ): void {
   // We only want to track usage for these specific apps
   const { app, targets: queries } = request;
 
-  if (app === CoreApp.Dashboard || app === CoreApp.PanelViewer) {
+  if (app !== CoreApp.Explore) {
     return;
   }
 
@@ -168,8 +170,7 @@ export function trackQuery(
       return;
     }
 
-    reportInteraction('grafana_loki_query_executed', {
-      app,
+    reportInteraction('grafana_explore_loki_query_executed', {
       grafana_version: config.buildInfo.version,
       editor_mode: query.editorMode,
       has_data: response.data.some((frame) => frame.length > 0),
@@ -187,9 +188,6 @@ export function trackQuery(
       time_taken: Date.now() - startTime.getTime(),
       bytes_processed: totalBytes,
       is_split: false,
-      predefined_operations_applied: trackingSettings.predefinedOperations
-        ? query.expr.includes(trackingSettings.predefinedOperations)
-        : 'n/a',
       ...extraPayload,
     });
   }
@@ -199,8 +197,7 @@ export function trackGroupedQueries(
   response: DataQueryResponse,
   groupedRequests: LokiGroupedRequest[],
   originalRequest: DataQueryRequest<LokiQuery>,
-  startTime: Date,
-  trackingSettings: LokiTrackingSettings = {}
+  startTime: Date
 ): void {
   const splittingPayload = {
     split_query_group_count: groupedRequests.length,
@@ -213,7 +210,7 @@ export function trackGroupedQueries(
 
   for (const group of groupedRequests) {
     const split_query_partition_size = group.partition.length;
-    trackQuery(response, group.request, startTime, trackingSettings, {
+    trackQuery(response, group.request, startTime, {
       ...splittingPayload,
       split_query_partition_size,
     });

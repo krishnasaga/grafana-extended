@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 
-import { Button, Field, HorizontalGroup, LinkButton } from '@grafana/ui';
+import { Trans, t } from '@grafana/i18n';
+import { Button, Field, LinkButton, Stack } from '@grafana/ui';
 import { Form } from 'app/core/components/Form/Form';
 import {
   ValidationLabels,
@@ -8,8 +9,7 @@ import {
   strongPasswordValidationRegister,
 } from 'app/core/components/ValidationLabels/ValidationLabels';
 import config from 'app/core/config';
-import { t, Trans } from 'app/core/internationalization';
-import { UserDTO } from 'app/types';
+import { UserDTO } from 'app/types/user';
 
 import { PasswordField } from '../../core/components/PasswordField/PasswordField';
 
@@ -118,14 +118,14 @@ export const ChangePasswordForm = ({ user, onChangePassword, isSaving }: Props) 
                 })}
               />
             </Field>
-            <HorizontalGroup>
+            <Stack>
               <Button variant="primary" disabled={isSaving} type="submit">
                 <Trans i18nKey="profile.change-password.change-password-button">Change Password</Trans>
               </Button>
               <LinkButton variant="secondary" href={`${config.appSubUrl}/profile`} fill="outline">
                 <Trans i18nKey="profile.change-password.cancel-button">Cancel</Trans>
               </LinkButton>
-            </HorizontalGroup>
+            </Stack>
           </>
         );
       }}

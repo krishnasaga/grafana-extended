@@ -11,6 +11,7 @@ import (
 	"gopkg.in/ini.v1"
 
 	"github.com/grafana/grafana/pkg/infra/db"
+	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/infra/usagestats"
 	encryptionprovider "github.com/grafana/grafana/pkg/services/encryption/provider"
 	encryptionservice "github.com/grafana/grafana/pkg/services/encryption/service"
@@ -22,13 +23,16 @@ import (
 	"github.com/grafana/grafana/pkg/setting"
 	"github.com/grafana/grafana/pkg/tests/testsuite"
 	"github.com/grafana/grafana/pkg/util"
+	"github.com/grafana/grafana/pkg/util/testutil"
 )
 
 func TestMain(m *testing.M) {
 	testsuite.Run(m)
 }
 
-func TestSecretsService_EnvelopeEncryption(t *testing.T) {
+func TestIntegrationSecretsService_EnvelopeEncryption(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	testDB := db.InitTestDB(t)
 	store := database.ProvideSecretsStore(testDB)
 	svc := SetupTestService(t, store)
@@ -89,7 +93,9 @@ func TestSecretsService_EnvelopeEncryption(t *testing.T) {
 	})
 }
 
-func TestSecretsService_DataKeys(t *testing.T) {
+func TestIntegrationSecretsService_DataKeys(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	testDB := db.InitTestDB(t)
 	store := database.ProvideSecretsStore(testDB)
 	ctx := context.Background()
@@ -167,7 +173,9 @@ func TestSecretsService_DataKeys(t *testing.T) {
 	})
 }
 
-func TestSecretsService_UseCurrentProvider(t *testing.T) {
+func TestIntegrationSecretsService_UseCurrentProvider(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	t.Run("When encryption_provider is not specified explicitly, should use 'secretKey' as a current provider", func(t *testing.T) {
 		testDB := db.InitTestDB(t)
 		svc := SetupTestService(t, database.ProvideSecretsStore(testDB))
@@ -192,7 +200,7 @@ func TestSecretsService_UseCurrentProvider(t *testing.T) {
 		encProvider := encryptionprovider.Provider{}
 		usageStats := &usagestats.UsageStatsMock{}
 
-		encryptionService, err := encryptionservice.ProvideEncryptionService(encProvider, usageStats, cfg)
+		encryptionService, err := encryptionservice.ProvideEncryptionService(tracing.InitializeTracerForTest(), encProvider, usageStats, cfg)
 		require.NoError(t, err)
 
 		features := featuremgmt.WithFeatures()
@@ -201,6 +209,7 @@ func TestSecretsService_UseCurrentProvider(t *testing.T) {
 		secretStore := database.ProvideSecretsStore(testDB)
 
 		secretsService, err := ProvideSecretsService(
+			tracing.InitializeTracerForTest(),
 			secretStore,
 			&kms,
 			encryptionService,
@@ -219,6 +228,7 @@ func TestSecretsService_UseCurrentProvider(t *testing.T) {
 		// secret service tries to find a DEK in a cache first before calling provider's decrypt
 		// to bypass the cache, we set up one more secrets service to test decrypting
 		svcDecrypt, err := ProvideSecretsService(
+			tracing.InitializeTracerForTest(),
 			secretStore,
 			&kms,
 			encryptionService,
@@ -270,7 +280,9 @@ func (f *fakeKMS) Provide() (map[secrets.ProviderID]secrets.Provider, error) {
 	return providers, nil
 }
 
-func TestSecretsService_Run(t *testing.T) {
+func TestIntegrationSecretsService_Run(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	ctx := context.Background()
 	testDB := db.InitTestDB(t)
 	store := database.ProvideSecretsStore(testDB)
@@ -320,7 +332,9 @@ func TestSecretsService_Run(t *testing.T) {
 	})
 }
 
-func TestSecretsService_ReEncryptDataKeys(t *testing.T) {
+func TestIntegrationSecretsService_ReEncryptDataKeys(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	ctx := context.Background()
 	testDB := db.InitTestDB(t)
 	store := database.ProvideSecretsStore(testDB)
@@ -367,7 +381,9 @@ func TestSecretsService_ReEncryptDataKeys(t *testing.T) {
 	})
 }
 
-func TestSecretsService_Decrypt(t *testing.T) {
+func TestIntegrationSecretsService_Decrypt(t *testing.T) {
+	testutil.SkipIntegrationTestInShortMode(t)
+
 	ctx := context.Background()
 	testDB := db.InitTestDB(t)
 	store := database.ProvideSecretsStore(testDB)
@@ -431,20 +447,18 @@ func TestSecretsService_Decrypt(t *testing.T) {
 }
 
 func TestIntegration_SecretsService(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
+	testutil.SkipIntegrationTestInShortMode(t)
 
 	ctx := context.Background()
 	someData := []byte(`some-data`)
 
-	tcs := map[string]func(*testing.T, *sqlstore.SQLStore, *SecretsService){
-		"regular": func(t *testing.T, _ *sqlstore.SQLStore, svc *SecretsService) {
+	tcs := map[string]func(*testing.T, db.DB, *SecretsService){
+		"regular": func(t *testing.T, _ db.DB, svc *SecretsService) {
 			// We encrypt some data normally, no transactions implied.
 			_, err := svc.Encrypt(ctx, someData, secrets.WithoutScope())
 			require.NoError(t, err)
 		},
-		"within successful InTransaction": func(t *testing.T, store *sqlstore.SQLStore, svc *SecretsService) {
+		"within successful InTransaction": func(t *testing.T, store db.DB, svc *SecretsService) {
 			require.NoError(t, store.InTransaction(ctx, func(ctx context.Context) error {
 				// We encrypt some data within a transaction that shares the db session.
 				_, err := svc.Encrypt(ctx, someData, secrets.WithoutScope())
@@ -454,7 +468,7 @@ func TestIntegration_SecretsService(t *testing.T) {
 				return nil
 			}))
 		},
-		"within unsuccessful InTransaction": func(t *testing.T, store *sqlstore.SQLStore, svc *SecretsService) {
+		"within unsuccessful InTransaction": func(t *testing.T, store db.DB, svc *SecretsService) {
 			require.NotNil(t, store.InTransaction(ctx, func(ctx context.Context) error {
 				// We encrypt some data within a transaction that shares the db session.
 				_, err := svc.Encrypt(ctx, someData, secrets.WithoutScope())
@@ -464,7 +478,7 @@ func TestIntegration_SecretsService(t *testing.T) {
 				return errors.New("error")
 			}))
 		},
-		"within unsuccessful InTransaction (plus forced db fetch)": func(t *testing.T, store *sqlstore.SQLStore, svc *SecretsService) {
+		"within unsuccessful InTransaction (plus forced db fetch)": func(t *testing.T, store db.DB, svc *SecretsService) {
 			require.NotNil(t, store.InTransaction(ctx, func(ctx context.Context) error {
 				// We encrypt some data within a transaction that shares the db session.
 				encrypted, err := svc.Encrypt(ctx, someData, secrets.WithoutScope())
@@ -483,7 +497,7 @@ func TestIntegration_SecretsService(t *testing.T) {
 				return errors.New("error")
 			}))
 		},
-		"within successful WithTransactionalDbSession": func(t *testing.T, store *sqlstore.SQLStore, svc *SecretsService) {
+		"within successful WithTransactionalDbSession": func(t *testing.T, store db.DB, svc *SecretsService) {
 			require.NoError(t, store.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
 				// We encrypt some data within a transaction that does not share the db session.
 				_, err := svc.Encrypt(ctx, someData, secrets.WithoutScope())
@@ -493,7 +507,7 @@ func TestIntegration_SecretsService(t *testing.T) {
 				return nil
 			}))
 		},
-		"within unsuccessful WithTransactionalDbSession": func(t *testing.T, store *sqlstore.SQLStore, svc *SecretsService) {
+		"within unsuccessful WithTransactionalDbSession": func(t *testing.T, store db.DB, svc *SecretsService) {
 			require.NotNil(t, store.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
 				// We encrypt some data within a transaction that does not share the db session.
 				_, err := svc.Encrypt(ctx, someData, secrets.WithoutScope())
@@ -503,7 +517,7 @@ func TestIntegration_SecretsService(t *testing.T) {
 				return errors.New("error")
 			}))
 		},
-		"within unsuccessful WithTransactionalDbSession (plus forced db fetch)": func(t *testing.T, store *sqlstore.SQLStore, svc *SecretsService) {
+		"within unsuccessful WithTransactionalDbSession (plus forced db fetch)": func(t *testing.T, store db.DB, svc *SecretsService) {
 			require.NotNil(t, store.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
 				// We encrypt some data within a transaction that does not share the db session.
 				encrypted, err := svc.Encrypt(ctx, someData, secrets.WithoutScope())

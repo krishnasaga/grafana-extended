@@ -1,12 +1,14 @@
 import { css } from '@emotion/css';
-import { flip, shift, autoUpdate } from '@floating-ui/dom';
+import { autoUpdate } from '@floating-ui/dom';
 import { useFloating } from '@floating-ui/react';
-import React, { useState } from 'react';
+import { useState } from 'react';
+import * as React from 'react';
 import { createPortal } from 'react-dom';
 
 import { GrafanaTheme2 } from '@grafana/data';
+import { selectors } from '@grafana/e2e-selectors';
 import { TimeZone } from '@grafana/schema';
-import { useStyles2 } from '@grafana/ui';
+import { floatingUtils, useStyles2 } from '@grafana/ui';
 
 import { AnnotationEditor2 } from './AnnotationEditor2';
 import { AnnotationTooltip2 } from './AnnotationTooltip2';
@@ -35,20 +37,13 @@ export const AnnotationMarker2 = ({
   portalRoot,
 }: AnnoBoxProps) => {
   const styles = useStyles2(getStyles);
+  const placement = 'bottom';
 
   const [state, setState] = useState(exitWipEdit != null ? STATE_EDITING : STATE_DEFAULT);
   const { refs, floatingStyles } = useFloating({
     open: true,
-    placement: 'bottom',
-    middleware: [
-      flip({
-        fallbackAxisSideDirection: 'end',
-        // see https://floating-ui.com/docs/flip#combining-with-shift
-        crossAxis: false,
-        boundary: document.body,
-      }),
-      shift(),
-    ],
+    placement,
+    middleware: floatingUtils.getPositioningMiddleware(placement),
     whileElementsMounted: autoUpdate,
     strategy: 'fixed',
   });
@@ -80,10 +75,11 @@ export const AnnotationMarker2 = ({
       style={style!}
       onMouseEnter={() => state !== STATE_EDITING && setState(STATE_HOVERED)}
       onMouseLeave={() => state !== STATE_EDITING && setState(STATE_DEFAULT)}
+      data-testid={selectors.pages.Dashboard.Annotations.marker}
     >
       {contents &&
         createPortal(
-          <div ref={refs.setFloating} className={styles.annoBox} style={floatingStyles}>
+          <div ref={refs.setFloating} className={styles.annoBox} style={floatingStyles} data-testid="annotation-marker">
             {contents}
           </div>,
           portalRoot

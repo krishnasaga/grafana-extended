@@ -22,7 +22,7 @@ title: Annotations HTTP API
 
 Annotations are saved in the Grafana database (sqlite, mysql or postgres). Annotations can be organization annotations that can be shown on any dashboard by configuring an annotation data source - they are filtered by tags. Or they can be tied to a panel on a dashboard and are then only shown on that panel.
 
-> If you are running Grafana Enterprise, for some endpoints you'll need to have specific permissions. Refer to [Role-based access control permissions]({{< relref "/docs/grafana/latest/administration/roles-and-permissions/access-control/custom-role-actions-scopes" >}}) for more information.
+> If you are running Grafana Enterprise, for some endpoints you'll need to have specific permissions. Refer to [Role-based access control permissions](/docs/grafana/latest/administration/roles-and-permissions/access-control/custom-role-actions-scopes/) for more information.
 
 ## Find Annotations
 
@@ -30,11 +30,14 @@ Annotations are saved in the Grafana database (sqlite, mysql or postgres). Annot
 
 **Required permissions**
 
-See note in the [introduction]({{< ref "#annotations-api" >}}) for an explanation.
+See note in the [introduction](#annotations-api) for an explanation.
 
-| Action           | Scope                   |
-| ---------------- | ----------------------- |
-| annotations:read | annotations:type:<type> |
+<!-- prettier-ignore-start -->
+| Action             | Scope                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `annotations:read` | <ul><li>`annotations:*`</li><li>`annotations:type:*`</li><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
 
 **Example Request**:
 
@@ -51,7 +54,7 @@ Query Parameters:
 - `to`: epoch datetime in milliseconds. Optional.
 - `limit`: number. Optional - default is 100. Max limit for results returned.
 - `alertId`: number. Optional. Find annotations for a specified alert.
-- `dashboardId`: number. Optional. Find annotations that are scoped to a specific dashboard
+- `dashboardId`: Deprecated. Use dashboardUID instead.
 - `dashboardUID`: string. Optional. Find annotations that are scoped to a specific dashboard, when dashboardUID presents, dashboardId would be ignored.
 - `panelId`: number. Optional. Find annotations that are scoped to a specific panel
 - `userId`: number. Optional. Find annotations created by a specific user
@@ -67,7 +70,6 @@ Content-Type: application/json
     {
         "id": 1124,
         "alertId": 0,
-        "dashboardId": 468,
         "dashboardUID": "uGlb_lG7z",
         "panelId": 2,
         "userId": 1,
@@ -77,7 +79,6 @@ Content-Type: application/json
         "time": 1507266395000,
         "timeEnd": 1507266395000,
         "text": "test",
-        "metric": "",
         "tags": [
             "tag1",
             "tag2"
@@ -87,7 +88,6 @@ Content-Type: application/json
     {
         "id": 1123,
         "alertId": 0,
-        "dashboardId": 468,
         "dashboardUID": "jcIIG-07z",
         "panelId": 2,
         "userId": 1,
@@ -96,7 +96,6 @@ Content-Type: application/json
         "prevState": "",
         "time": 1507265111000,
         "text": "test",
-        "metric": "",
         "tags": [
             "tag1",
             "tag2"
@@ -110,7 +109,7 @@ Content-Type: application/json
 
 ## Create Annotation
 
-Creates an annotation in the Grafana database. The `dashboardId` and `panelId` fields are optional.
+Creates an annotation in the Grafana database. The `dashboardUid` and `panelId` fields are optional.
 If they are not specified then an organization annotation is created and can be queried in any dashboard that adds
 the Grafana annotations data source. When creating a region annotation include the timeEnd property.
 
@@ -120,11 +119,14 @@ The format for `time` and `timeEnd` should be epoch numbers in millisecond resol
 
 **Required permissions**
 
-See note in the [introduction]({{< ref "#annotations-api" >}}) for an explanation.
+See note in the [introduction](#annotations-api) for an explanation.
 
-| Action             | Scope                   |
-| ------------------ | ----------------------- |
-| annotations:create | annotations:type:<type> |
+<!-- prettier-ignore-start -->
+| Action               | Scope                                                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `annotations:create` | <ul><li>`annotations:*`</li><li>`annotations:type:*`</li><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
 
 **Required JSON Body Fields**
 
@@ -139,7 +141,6 @@ Content-Type: application/json
 
 {
   "dashboardUID":"jcIIG-07z",
-  "panelId":1,
   "time":1507037197339,
   "timeEnd":1507180805056,
   "tags":["tag1","tag2"],
@@ -172,11 +173,11 @@ format (string with multiple tags being separated by a space).
 
 **Required permissions**
 
-See note in the [introduction]({{< ref "#annotations-api" >}}) for an explanation.
+See note in the [introduction](#annotations-api) for an explanation.
 
-| Action             | Scope                         |
-| ------------------ | ----------------------------- |
-| annotations:create | annotations:type:organization |
+| Action               | Scope                           |
+| -------------------- | ------------------------------- |
+| `annotations:create` | `annotations:type:organization` |
 
 **Example Request**:
 
@@ -213,11 +214,14 @@ Updates all properties of an annotation that matches the specified id. To only u
 
 **Required permissions**
 
-See note in the [introduction]({{< ref "#annotations-api" >}}) for an explanation.
+See note in the [introduction](#annotations-api) for an explanation.
 
-| Action            | Scope                   |
-| ----------------- | ----------------------- |
-| annotations:write | annotations:type:<type> |
+<!-- prettier-ignore-start -->
+| Action              | Scope                                                                                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `annotations:write` | <ul><li>`annotations:*`</li><li>`annotations:type:*`</li><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
 
 **Example Request**:
 
@@ -248,8 +252,6 @@ Content-Type: application/json
 
 ## Patch Annotation
 
-> This is available in Grafana 6.0.0-beta2 and above.
-
 `PATCH /api/annotations/:id`
 
 Updates one or more properties of an annotation that matches the specified id.
@@ -258,11 +260,14 @@ This operation currently supports updating of the `text`, `tags`, `time` and `ti
 
 **Required permissions**
 
-See note in the [introduction]({{< ref "#annotations-api" >}}) for an explanation.
+See note in the [introduction](#annotations-api) for an explanation.
 
-| Action            | Scope                   |
-| ----------------- | ----------------------- |
-| annotations:write | annotations:type:<type> |
+<!-- prettier-ignore-start -->
+| Action              | Scope                                                                                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `annotations:write` | <ul><li>`annotations:*`</li><li>`annotations:type:*`</li><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
 
 **Example Request**:
 
@@ -297,11 +302,14 @@ Deletes the annotation that matches the specified id.
 
 **Required permissions**
 
-See note in the [introduction]({{< ref "#annotations-api" >}}) for an explanation.
+See note in the [introduction](#annotations-api) for an explanation.
 
-| Action             | Scope                   |
-| ------------------ | ----------------------- |
-| annotations:delete | annotations:type:<type> |
+<!-- prettier-ignore-start -->
+| Action               | Scope                                                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `annotations:delete` | <ul><li>`annotations:*`</li><li>`annotations:type:*`</li><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
 
 **Example Request**:
 
@@ -331,11 +339,11 @@ Find all the event tags created in the annotations.
 
 **Required permissions**
 
-See note in the [introduction]({{< ref "#annotations-api" >}}) for an explanation.
+See note in the [introduction](#annotations-api) for an explanation.
 
-| Action           | Scope |
-| ---------------- | ----- |
-| annotations:read | N/A   |
+| Action             | Scope |
+| ------------------ | ----- |
+| `annotations:read` | N/A   |
 
 **Example Request**:
 

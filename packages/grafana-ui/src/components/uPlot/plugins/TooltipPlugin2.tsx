@@ -1,18 +1,21 @@
 import { css, cx } from '@emotion/css';
-import React, { useLayoutEffect, useRef, useReducer, CSSProperties } from 'react';
+import { useLayoutEffect, useRef, useReducer, CSSProperties } from 'react';
+import * as React from 'react';
 import { createPortal } from 'react-dom';
 import uPlot from 'uplot';
 
-import { GrafanaTheme2 } from '@grafana/data';
+import { GrafanaTheme2, LinkModel } from '@grafana/data';
+import { DashboardCursorSync } from '@grafana/schema';
 
-import { useStyles2 } from '../../../themes';
+import { AdHocFilterModel } from '../../../internal';
+import { useStyles2 } from '../../../themes/ThemeContext';
+import { RangeSelection1D, RangeSelection2D, OnSelectRangeCallback } from '../../PanelChrome';
 import { getPortalContainer } from '../../Portal/Portal';
 import { UPlotConfigBuilder } from '../config/UPlotConfigBuilder';
 
 import { CloseButton } from './CloseButton';
 
 export const DEFAULT_TOOLTIP_WIDTH = undefined;
-export const DEFAULT_TOOLTIP_HEIGHT = undefined;
 export const TOOLTIP_OFFSET = 10;
 
 // todo: barchart? histogram?
@@ -25,16 +28,24 @@ export const enum TooltipHoverMode {
   xyOne,
 }
 
+type GetDataLinksCallback = (seriesIdx: number, dataIdx: number) => LinkModel[];
+type GetAdHocFiltersCallback = (seriesIdx: number, dataIdx: number) => AdHocFilterModel[];
+
 interface TooltipPlugin2Props {
   config: UPlotConfigBuilder;
   hoverMode: TooltipHoverMode;
 
-  syncTooltip?: () => boolean;
+  syncMode?: DashboardCursorSync;
+  syncScope?: string;
 
   // x only
   queryZoom?: (range: { from: number; to: number }) => void;
   // y-only, via shiftKey
   clientZoom?: boolean;
+
+  onSelectRange?: OnSelectRangeCallback;
+  getDataLinks?: GetDataLinksCallback;
+  getAdHocFilters?: GetAdHocFiltersCallback;
 
   render: (
     u: uPlot,
@@ -44,11 +55,12 @@ interface TooltipPlugin2Props {
     dismiss: () => void,
     // selected time range (for annotation triggering)
     timeRange: TimeRange2 | null,
-    viaSync: boolean
+    viaSync: boolean,
+    dataLinks: LinkModel[],
+    adHocFilters: AdHocFilterModel[]
   ) => React.ReactNode;
 
   maxWidth?: number;
-  maxHeight?: number;
 }
 
 interface TooltipContainerState {
@@ -98,6 +110,11 @@ const MIN_ZOOM_DIST = 5;
 
 const maybeZoomAction = (e?: MouseEvent | null) => e != null && !e.ctrlKey && !e.metaKey;
 
+const getDataLinksFallback: GetDataLinksCallback = () => [];
+const getAdHocFiltersFallback: GetAdHocFiltersCallback = () => [];
+
+const userAgentIsMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+
 /**
  * @alpha
  */
@@ -107,9 +124,12 @@ export const TooltipPlugin2 = ({
   render,
   clientZoom = false,
   queryZoom,
+  onSelectRange,
   maxWidth,
-  maxHeight,
-  syncTooltip = () => false,
+  syncMode = DashboardCursorSync.Off,
+  syncScope = 'global', // eventsScope
+  getDataLinks = getDataLinksFallback,
+  getAdHocFilters = getAdHocFiltersFallback,
 }: TooltipPlugin2Props) => {
   const domRef = useRef<HTMLDivElement>(null);
   const portalRoot = useRef<HTMLElement | null>(null);
@@ -121,15 +141,20 @@ export const TooltipPlugin2 = ({
   const [{ plot, isHovering, isPinned, contents, style, dismiss }, setState] = useReducer(mergeState, null, initState);
 
   const sizeRef = useRef<TooltipContainerSize>();
-
-  maxWidth = isPinned ? DEFAULT_TOOLTIP_WIDTH : maxWidth ?? DEFAULT_TOOLTIP_WIDTH;
-  maxHeight ??= DEFAULT_TOOLTIP_HEIGHT;
-  const styles = useStyles2(getStyles, maxWidth, maxHeight);
+  const styles = useStyles2(getStyles, maxWidth);
 
   const renderRef = useRef(render);
   renderRef.current = render;
 
+  const getLinksRef = useRef(getDataLinks);
+  getLinksRef.current = getDataLinks;
+
+  const getAdHocFiltersRef = useRef(getAdHocFilters);
+  getAdHocFiltersRef.current = getAdHocFilters;
+
   useLayoutEffect(() => {
+    sizeRef.current?.observer.disconnect();
+
     sizeRef.current = {
       width: 0,
       height: 0,
@@ -159,9 +184,20 @@ export const TooltipPlugin2 = ({
 
     let plotVisible = false;
 
+    const syncTooltip = syncMode === DashboardCursorSync.Tooltip;
+
+    if (syncMode !== DashboardCursorSync.Off && config.scales[0].props.isTime) {
+      config.setCursor({
+        sync: {
+          key: syncScope,
+          scales: ['x', null],
+        },
+      });
+    }
+
     const updateHovering = () => {
       if (viaSync) {
-        _isHovering = plotVisible && _someSeriesIdx && syncTooltip();
+        _isHovering = plotVisible && _someSeriesIdx && syncTooltip;
       } else {
         _isHovering = closestSeriesIdx != null || (hoverMode === TooltipHoverMode.xAll && _someSeriesIdx);
       }
@@ -171,9 +207,16 @@ export const TooltipPlugin2 = ({
     let offsetY = 0;
 
     let selectedRange: TimeRange2 | null = null;
-    let seriesIdxs: Array<number | null> = plot?.cursor.idxs!.slice()!;
+    let seriesIdxs: Array<number | null> = [];
     let closestSeriesIdx: number | null = null;
     let viaSync = false;
+    let dataLinks: LinkModel[] = [];
+    let adHocFilters: AdHocFilterModel[] = [];
+
+    // for onceClick link rendering during mousemoves we use these pre-generated first links or actions
+    // these will be wrong if the titles have interpolation using the hovered *value*
+    // but this should be quite rare. we'll fix it if someone actually encounters this
+    let persistentLinks: LinkModel[][] = [];
 
     let pendingRender = false;
     let pendingPinned = false;
@@ -197,8 +240,11 @@ export const TooltipPlugin2 = ({
 
     // in some ways this is similar to ClickOutsideWrapper.tsx
     const downEventOutside = (e: Event) => {
+      // this tooltip is Portaled, but actions inside it create forms in Modals
+      const isModalOrPortaled = '[role="dialog"], #grafana-portal-container';
+
       // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
-      if (!domRef.current!.contains(e.target as Node)) {
+      if ((e.target as HTMLElement).closest(isModalOrPortaled) == null) {
         dismiss();
       }
     };
@@ -229,12 +275,25 @@ export const TooltipPlugin2 = ({
         isHovering: _isHovering,
         contents:
           _isHovering || selectedRange != null
-            ? renderRef.current(_plot!, seriesIdxs, closestSeriesIdx, _isPinned, dismiss, selectedRange, viaSync)
+            ? renderRef.current(
+                _plot!,
+                seriesIdxs,
+                closestSeriesIdx,
+                _isPinned,
+                dismiss,
+                selectedRange,
+                viaSync,
+                _isPinned ? dataLinks : closestSeriesIdx != null ? persistentLinks[closestSeriesIdx] : [],
+                _isPinned ? adHocFilters : []
+              )
             : null,
         dismiss,
       };
 
       setState(state);
+
+      // TODO: set u.over.style.cursor = 'pointer' if we hovered a oneClick point
+      // else revert to default...but only when the new pointer is different from prev
 
       selectedRange = null;
     };
@@ -244,6 +303,9 @@ export const TooltipPlugin2 = ({
       _isPinned = false;
       _isHovering = false;
       _plot!.setCursor({ left: -10, top: -10 });
+      dataLinks = [];
+      adHocFilters = [];
+
       scheduleRender(prevIsPinned);
     };
 
@@ -278,7 +340,7 @@ export const TooltipPlugin2 = ({
         );
       }
 
-      // this handles pinning
+      // this handles pinning, 0-width range selection, and one-click
       u.over.addEventListener('click', (e) => {
         if (e.target === u.over) {
           if (e.ctrlKey || e.metaKey) {
@@ -298,10 +360,20 @@ export const TooltipPlugin2 = ({
 
             scheduleRender(false);
           }
-          // only pinnable tooltip is visible *and* is within proximity to series/point
-          else if (_isHovering && closestSeriesIdx != null && !_isPinned) {
-            _isPinned = true;
-            scheduleRender(true);
+          // if tooltip visible, not pinned, and within proximity to a series/point
+          else if (_isHovering && !_isPinned && closestSeriesIdx != null) {
+            dataLinks = getLinksRef.current(closestSeriesIdx, seriesIdxs[closestSeriesIdx]!);
+            adHocFilters = getAdHocFiltersRef.current(closestSeriesIdx, seriesIdxs[closestSeriesIdx]!);
+            const oneClickLink = dataLinks.find((dataLink) => dataLink.oneClick === true);
+
+            if (oneClickLink != null) {
+              window.open(oneClickLink.href, oneClickLink.target ?? '_self');
+            } else {
+              setTimeout(() => {
+                _isPinned = true;
+                scheduleRender(true);
+              }, 0);
+            }
           }
         }
       });
@@ -309,9 +381,65 @@ export const TooltipPlugin2 = ({
 
     config.addHook('setSelect', (u) => {
       const isXAxisHorizontal = u.scales.x.ori === 0;
+
       if (!viaSync && (clientZoom || queryZoom != null)) {
         if (maybeZoomAction(u.cursor!.event)) {
-          if (clientZoom && yDrag) {
+          if (onSelectRange != null) {
+            let selections: RangeSelection2D[] = [];
+
+            const yDrag = Boolean(u.cursor!.drag!.y);
+            const xDrag = Boolean(u.cursor!.drag!.x);
+
+            let xSel = null;
+            let ySels: RangeSelection1D[] = [];
+
+            // get x selection
+            if (xDrag) {
+              xSel = {
+                from: isXAxisHorizontal
+                  ? u.posToVal(u.select.left!, 'x')
+                  : u.posToVal(u.select.top + u.select.height, 'x'),
+                to: isXAxisHorizontal
+                  ? u.posToVal(u.select.left! + u.select.width, 'x')
+                  : u.posToVal(u.select.top, 'x'),
+              };
+            }
+
+            // get y selections
+            if (yDrag) {
+              config.scales.forEach((scale) => {
+                const key = scale.props.scaleKey;
+
+                if (key !== 'x') {
+                  let ySel = {
+                    from: isXAxisHorizontal
+                      ? u.posToVal(u.select.top + u.select.height, key)
+                      : u.posToVal(u.select.left + u.select.width, key),
+                    to: isXAxisHorizontal ? u.posToVal(u.select.top, key) : u.posToVal(u.select.left, key),
+                  };
+
+                  ySels.push(ySel);
+                }
+              });
+            }
+
+            if (xDrag) {
+              if (yDrag) {
+                // x + y
+                selections = ySels.map((ySel) => ({ x: xSel!, y: ySel }));
+              } else {
+                // x only
+                selections = [{ x: xSel! }];
+              }
+            } else {
+              if (yDrag) {
+                // y only
+                selections = ySels.map((ySel) => ({ y: ySel }));
+              }
+            }
+
+            onSelectRange(selections);
+          } else if (clientZoom && yDrag) {
             if (u.select.height >= MIN_ZOOM_DIST) {
               for (let key in u.scales!) {
                 if (key !== 'x') {
@@ -394,6 +522,10 @@ export const TooltipPlugin2 = ({
     config.addHook('setData', (u) => {
       yZoomed = false;
       yDrag = false;
+
+      if (_isPinned) {
+        dismiss();
+      }
     });
 
     // fires on series focus/proximity changes
@@ -412,9 +544,28 @@ export const TooltipPlugin2 = ({
       seriesIdxs = _plot?.cursor!.idxs!.slice()!;
       _someSeriesIdx = seriesIdxs.some((v, i) => i > 0 && v != null);
 
+      if (persistentLinks.length === 0) {
+        persistentLinks = seriesIdxs.map((v, seriesIdx) => {
+          if (seriesIdx > 0) {
+            const links = getDataLinks(seriesIdx, seriesIdxs[seriesIdx]!);
+            const oneClickLink = links.find((dataLink) => dataLink.oneClick === true);
+
+            if (oneClickLink) {
+              return [oneClickLink];
+            }
+          }
+
+          return [];
+        });
+      }
+
       viaSync = u.cursor.event == null;
+      let prevIsHovering = _isHovering;
       updateHovering();
-      scheduleRender();
+
+      if (_isHovering || _isHovering !== prevIsHovering) {
+        scheduleRender();
+      }
     });
 
     const scrollbarWidth = 16;
@@ -503,15 +654,21 @@ export const TooltipPlugin2 = ({
 
     const onscroll = (e: Event) => {
       updatePlotVisible();
-      _isHovering && !_isPinned && e.target instanceof HTMLElement && e.target.contains(_plot!.root) && dismiss();
+      _isHovering && e.target instanceof Node && e.target.contains(_plot!.root) && dismiss();
     };
 
     window.addEventListener('resize', updateWinSize);
     window.addEventListener('scroll', onscroll, true);
 
     return () => {
+      sizeRef.current?.observer.disconnect();
+
       window.removeEventListener('resize', updateWinSize);
       window.removeEventListener('scroll', onscroll, true);
+
+      // in case this component unmounts while anchored (due to data auto-refresh + re-config)
+      document.removeEventListener('mousedown', downEventOutside, true);
+      document.removeEventListener('keydown', downEventOutside, true);
     };
   }, [config]);
 
@@ -519,9 +676,55 @@ export const TooltipPlugin2 = ({
     const size = sizeRef.current!;
 
     if (domRef.current != null) {
+      size.observer.disconnect();
       size.observer.observe(domRef.current);
+
+      // since the above observer is attached after container is in DOM, we need to manually update sizeRef
+      // and re-trigger a cursor move to do initial positioning math
+      const { width, height } = domRef.current.getBoundingClientRect();
+      size.width = width;
+      size.height = height;
+
+      let event = plot!.cursor.event;
+
+      // if not viaSync, re-dispatch real event
+      if (event != null) {
+        // we expect to re-dispatch mousemove, but may have a different event type, so create a mousemove event and fire that instead
+        // this doesn't work for every mobile device, so fall back to checking the useragent as well
+        const isMobile = event.type !== 'mousemove' || userAgentIsMobile;
+
+        if (isMobile) {
+          event = new MouseEvent('mousemove', {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            screenX: event.screenX,
+            screenY: event.screenY,
+          });
+        }
+
+        // this works around the fact that uPlot does not unset cursor.event (for perf reasons)
+        // so if the last real mouse event was mouseleave and you manually trigger u.setCursor()
+        // it would end up re-dispatching mouseleave
+        const isStaleEvent = isMobile ? false : performance.now() - event.timeStamp > 16;
+
+        !isStaleEvent && plot!.over.dispatchEvent(event);
+      } else {
+        plot!.setCursor(
+          {
+            left: plot!.cursor.left!,
+            top: plot!.cursor.top!,
+          },
+          true
+        );
+      }
+    } else {
+      size.width = 0;
+      size.height = 0;
     }
-  }, [domRef.current]);
+  }, [isHovering]);
 
   if (plot && isHovering) {
     return createPortal(
@@ -542,7 +745,7 @@ export const TooltipPlugin2 = ({
   return null;
 };
 
-const getStyles = (theme: GrafanaTheme2, maxWidth?: number, maxHeight?: number) => ({
+const getStyles = (theme: GrafanaTheme2, maxWidth?: number) => ({
   tooltipWrapper: css({
     top: 0,
     left: 0,
@@ -550,13 +753,11 @@ const getStyles = (theme: GrafanaTheme2, maxWidth?: number, maxHeight?: number) 
     whiteSpace: 'pre',
     borderRadius: theme.shape.radius.default,
     position: 'fixed',
-    background: theme.colors.background.primary,
+    background: theme.colors.background.elevated,
     border: `1px solid ${theme.colors.border.weak}`,
     boxShadow: theme.shadows.z2,
     userSelect: 'text',
     maxWidth: maxWidth ?? 'none',
-    maxHeight: maxHeight ?? 'none',
-    overflowY: 'auto',
   }),
   pinned: css({
     boxShadow: theme.shadows.z3,

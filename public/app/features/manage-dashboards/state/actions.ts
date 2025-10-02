@@ -1,11 +1,16 @@
 import { DataSourceInstanceSettings } from '@grafana/data';
 import { getBackendSrv, getDataSourceSrv, isFetchError } from '@grafana/runtime';
+import {
+  Spec as DashboardV2Spec,
+  QueryVariableKind,
+  PanelQueryKind,
+  AnnotationQueryKind,
+} from '@grafana/schema/dist/esm/schema/dashboard/v2';
 import { notifyApp } from 'app/core/actions';
 import { createErrorNotification } from 'app/core/copy/appNotification';
 import { browseDashboardsAPI, ImportInputs } from 'app/features/browse-dashboards/api/browseDashboardsAPI';
-import { SaveDashboardCommand } from 'app/features/dashboard/components/SaveDashboard/types';
-import { dashboardWatcher } from 'app/features/live/dashboard/dashboardWatcher';
-import { FolderInfo, PermissionLevelString, SearchQueryType, ThunkResult } from 'app/types';
+import { getDatasourceSrv } from 'app/features/plugins/datasource_srv';
+import { ThunkResult } from 'app/types/store';
 
 import {
   Input,
@@ -15,11 +20,11 @@ import {
 } from '../../dashboard/components/DashExportModal/DashboardExporter';
 import { getLibraryPanel } from '../../library-panels/state/api';
 import { LibraryElementDTO, LibraryElementKind } from '../../library-panels/types';
-import { DashboardSearchHit } from '../../search/types';
-import { DashboardJson, DeleteDashboardResponse } from '../types';
+import { DashboardJson } from '../types';
 
 import {
   clearDashboard,
+  DataSourceInput,
   fetchDashboard,
   fetchFailed,
   ImportDashboardDTO,
@@ -55,6 +60,13 @@ export function importDashboardJson(dashboard: any): ThunkResult<void> {
     await dispatch(processElements(dashboard));
     await dispatch(processJsonDashboard(dashboard));
     dispatch(processInputs());
+  };
+}
+
+export function importDashboardV2Json(dashboard: DashboardV2Spec): ThunkResult<void> {
+  return async (dispatch) => {
+    dispatch(setJsonDashboard(dashboard));
+    dispatch(processV2Datasources(dashboard));
   };
 }
 
@@ -144,6 +156,38 @@ function processElements(dashboardJson?: { __elements?: Record<string, LibraryEl
   };
 }
 
+export function processV2Datasources(dashboard: DashboardV2Spec): ThunkResult<void> {
+  return async function (dispatch) {
+    const { elements, variables, annotations } = dashboard;
+    // get elements from dashboard
+    // each element can only be a panel
+    let inputs: Record<string, DataSourceInput> = {};
+    for (const element of Object.values(elements)) {
+      if (element.kind !== 'Panel') {
+        throw new Error('Only panels are currenlty supported in v2 dashboards');
+      }
+
+      if (element.spec.data.spec.queries.length > 0) {
+        for (const query of element.spec.data.spec.queries) {
+          inputs = await processV2DatasourceInput(query.spec, inputs);
+        }
+      }
+    }
+
+    for (const variable of variables) {
+      if (variable.kind === 'QueryVariable') {
+        inputs = await processV2DatasourceInput(variable.spec, inputs);
+      }
+    }
+
+    for (const annotation of annotations) {
+      inputs = await processV2DatasourceInput(annotation.spec, inputs);
+    }
+
+    dispatch(setInputs(Object.values(inputs)));
+  };
+}
+
 export async function getLibraryPanelInputs(dashboardJson?: {
   __elements?: Record<string, LibraryElementExport>;
 }): Promise<LibraryPanelInput[]> {
@@ -212,7 +256,7 @@ export function importDashboard(importDashboardForm: ImportDashboardDTO): ThunkR
       });
     });
 
-    importDashboardForm.constants?.forEach((constant: any, index: number) => {
+    importDashboardForm.constants?.forEach((constant, index) => {
       const input = inputs.constants[index];
 
       inputsToPersist.push({
@@ -262,109 +306,39 @@ const getDataSourceDescription = (input: { usage?: InputUsage }): string | undef
   return undefined;
 };
 
-export async function moveFolders(folderUIDs: string[], toFolder: FolderInfo) {
-  const result = {
-    totalCount: folderUIDs.length,
-    successCount: 0,
-  };
+export async function processV2DatasourceInput(
+  spec: PanelQueryKind['spec'] | QueryVariableKind['spec'] | AnnotationQueryKind['spec'],
+  inputs: Record<string, DataSourceInput> = {}
+) {
+  let dataSourceInput: DataSourceInput | undefined;
+  const dsType = spec.query.group;
 
-  for (const folderUID of folderUIDs) {
-    try {
-      const newFolderDTO = await moveFolder(folderUID, toFolder);
-      if (newFolderDTO !== null) {
-        result.successCount += 1;
-      }
-    } catch (err) {
-      console.error('Failed to move a folder', err);
-    }
+  const datasource = await getDatasourceSrv().get({ type: dsType });
+
+  if (datasource.meta?.builtIn) {
+    return inputs;
   }
 
-  return result;
-}
-
-function createTask(fn: (...args: any[]) => Promise<any>, ignoreRejections: boolean, ...args: any[]) {
-  return async (result: any) => {
-    try {
-      const res = await fn(...args);
-      return Array.prototype.concat(result, [res]);
-    } catch (err) {
-      if (ignoreRejections) {
-        return result;
-      }
-
-      throw err;
-    }
-  };
-}
-
-export function deleteFoldersAndDashboards(folderUids: string[], dashboardUids: string[]) {
-  const tasks = [];
-
-  for (const folderUid of folderUids) {
-    tasks.push(createTask(deleteFolder, true, folderUid, true));
+  if (datasource) {
+    dataSourceInput = {
+      name: datasource.name,
+      label: datasource.name,
+      info: `Select a ${datasource.type} data source`,
+      value: datasource.uid,
+      type: InputType.DataSource,
+      pluginId: datasource.meta?.id,
+    };
+    inputs[datasource.meta?.id] = dataSourceInput;
+  } else {
+    dataSourceInput = {
+      name: dsType,
+      label: dsType,
+      info: `No data sources of type ${dsType} found`,
+      value: '',
+      type: InputType.DataSource,
+      pluginId: dsType,
+    };
+    inputs[dsType] = dataSourceInput;
   }
-
-  for (const dashboardUid of dashboardUids) {
-    tasks.push(createTask(deleteDashboard, true, dashboardUid, true));
-  }
-
-  return executeInOrder(tasks);
-}
-
-export function saveDashboard(options: SaveDashboardCommand) {
-  dashboardWatcher.ignoreNextSave();
-
-  return getBackendSrv().post('/api/dashboards/db/', {
-    dashboard: options.dashboard,
-    message: options.message ?? '',
-    overwrite: options.overwrite ?? false,
-    folderUid: options.folderUid,
-  });
-}
-
-function deleteFolder(uid: string, showSuccessAlert: boolean) {
-  return getBackendSrv().delete(`/api/folders/${uid}?forceDeleteRules=false`, undefined, { showSuccessAlert });
-}
-
-export function createFolder(payload: any) {
-  return getBackendSrv().post('/api/folders', payload);
-}
-
-export function moveFolder(uid: string, toFolder: FolderInfo) {
-  const payload = {
-    parentUid: toFolder.uid,
-  };
-  return getBackendSrv().post(`/api/folders/${uid}/move`, payload, { showErrorAlert: false });
-}
-
-export const SLICE_FOLDER_RESULTS_TO = 1000;
-
-export function searchFolders(
-  query: any,
-  permission?: PermissionLevelString,
-  type: SearchQueryType = SearchQueryType.Folder
-): Promise<DashboardSearchHit[]> {
-  return getBackendSrv().get('/api/search', {
-    query,
-    type: type,
-    permission,
-    limit: SLICE_FOLDER_RESULTS_TO,
-  });
-}
-
-export function getFolderByUid(uid: string): Promise<{ uid: string; title: string }> {
-  return getBackendSrv().get(`/api/folders/${uid}`);
-}
-export function getFolderById(id: number): Promise<{ id: number; title: string }> {
-  return getBackendSrv().get(`/api/folders/id/${id}`);
-}
-
-export function deleteDashboard(uid: string, showSuccessAlert: boolean) {
-  return getBackendSrv().delete<DeleteDashboardResponse>(`/api/dashboards/uid/${uid}`, { showSuccessAlert });
-}
-
-function executeInOrder(tasks: any[]): Promise<unknown> {
-  return tasks.reduce((acc, task) => {
-    return Promise.resolve(acc).then(task);
-  }, []);
+  return inputs;
 }

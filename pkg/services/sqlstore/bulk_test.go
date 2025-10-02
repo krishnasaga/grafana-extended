@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/grafana/grafana/pkg/util/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,10 +62,9 @@ func TestBatching(t *testing.T) {
 }
 
 func TestIntegrationBulkOps(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-	db := InitTestDB(t)
+	testutil.SkipIntegrationTestInShortMode(t)
+
+	db, _ := InitTestDB(t)
 	err := db.engine.Sync(new(bulkTestItem))
 	require.NoError(t, err)
 

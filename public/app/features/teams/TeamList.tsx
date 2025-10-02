@@ -1,35 +1,40 @@
 import { css } from '@emotion/css';
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Skeleton from 'react-loading-skeleton';
 import { connect, ConnectedProps } from 'react-redux';
 
 import { GrafanaTheme2 } from '@grafana/data';
+import { Trans, t } from '@grafana/i18n';
+import { config, getBackendSrv } from '@grafana/runtime';
 import {
   Avatar,
   CellProps,
   Column,
   DeleteButton,
+  EmptyState,
   FilterInput,
-  Icon,
   InlineField,
   InteractiveTable,
   LinkButton,
   Pagination,
   Stack,
-  Tooltip,
+  Tag,
+  TextLink,
   useStyles2,
 } from '@grafana/ui';
-import EmptyListCTA from 'app/core/components/EmptyListCTA/EmptyListCTA';
 import { Page } from 'app/core/components/Page/Page';
 import { fetchRoleOptions } from 'app/core/components/RolePicker/api';
 import { contextSrv } from 'app/core/services/context_srv';
-import { AccessControlAction, Role, StoreState, Team } from 'app/types';
+import { Role, AccessControlAction } from 'app/types/accessControl';
+import { StoreState } from 'app/types/store';
+import { TeamWithRoles } from 'app/types/teams';
 
 import { TeamRolePicker } from '../../core/components/RolePicker/TeamRolePicker';
+import { EnterpriseAuthFeaturesCard } from '../admin/EnterpriseAuthFeaturesCard';
 
 import { deleteTeam, loadTeams, changePage, changeQuery, changeSort } from './state/actions';
 
-type Cell<T extends keyof Team = keyof Team> = CellProps<Team, Team[T]>;
+type Cell<T extends keyof TeamWithRoles = keyof TeamWithRoles> = CellProps<TeamWithRoles, TeamWithRoles[T]>;
 export interface OwnProps {}
 
 export interface State {
@@ -37,12 +42,13 @@ export interface State {
 }
 
 // this is dummy data to pass to the table while the real data is loading
-const skeletonData: Team[] = new Array(3).fill(null).map((_, index) => ({
+const skeletonData: TeamWithRoles[] = new Array(3).fill(null).map((_, index) => ({
   id: index,
+  uid: '',
   memberCount: 0,
   name: '',
   orgId: 0,
-  permission: 0,
+  isProvisioned: false,
 }));
 
 export const TeamList = ({
@@ -60,6 +66,7 @@ export const TeamList = ({
   changeSort,
 }: Props) => {
   const [roleOptions, setRoleOptions] = useState<Role[]>([]);
+  const [scimGroupSyncEnabled, setScimGroupSyncEnabled] = useState(false);
   const styles = useStyles2(getStyles);
 
   useEffect(() => {
@@ -72,10 +79,29 @@ export const TeamList = ({
     }
   }, []);
 
+  useEffect(() => {
+    const checkSCIMSettings = async () => {
+      if (!config.featureToggles.enableSCIM) {
+        setScimGroupSyncEnabled(false);
+        return;
+      }
+      try {
+        const scimSettings = await getBackendSrv().get(
+          `/apis/scim.grafana.app/v0alpha1/namespaces/${config.namespace}/config`
+        );
+        setScimGroupSyncEnabled(scimSettings?.items[0]?.spec?.enableGroupSync || false);
+      } catch {
+        setScimGroupSyncEnabled(false);
+      }
+    };
+
+    checkSCIMSettings();
+  }, []);
+
   const canCreate = contextSrv.hasPermission(AccessControlAction.ActionTeamsCreate);
   const displayRolePicker = shouldDisplayRolePicker();
 
-  const columns: Array<Column<Team>> = useMemo(
+  const columns: Array<Column<TeamWithRoles>> = useMemo(
     () => [
       {
         id: 'avatarUrl',
@@ -92,11 +118,26 @@ export const TeamList = ({
       {
         id: 'name',
         header: 'Name',
-        cell: ({ cell: { value } }: Cell<'name'>) => {
+        cell: ({ cell: { value }, row: { original } }: Cell<'name'>) => {
           if (!hasFetched) {
             return <Skeleton width={100} />;
           }
-          return value;
+
+          const canReadTeam = contextSrv.hasPermissionInMetadata(AccessControlAction.ActionTeamsRead, original);
+          if (!canReadTeam) {
+            return value;
+          }
+
+          return (
+            <TextLink
+              color="primary"
+              inline={false}
+              href={`/org/teams/edit/${original.uid}`}
+              title={t('teams.team-list.columns.title-edit-team', 'Edit team')}
+            >
+              {value}
+            </TextLink>
+          );
         },
         sortType: 'string',
       },
@@ -152,6 +193,16 @@ export const TeamList = ({
           ]
         : []),
       {
+        id: 'isProvisioned',
+        header: '',
+        cell: ({ cell: { value } }: Cell<'isProvisioned'>) => {
+          if (!hasFetched) {
+            return <Skeleton width={240} />;
+          }
+          return !!value && <Tag colorIndex={14} name={'Provisioned'} />;
+        },
+      },
+      {
         id: 'actions',
         header: '',
         disableGrow: true,
@@ -166,72 +217,102 @@ export const TeamList = ({
           }
 
           const canReadTeam = contextSrv.hasPermissionInMetadata(AccessControlAction.ActionTeamsRead, original);
-          const canDelete = contextSrv.hasPermissionInMetadata(AccessControlAction.ActionTeamsDelete, original);
+          const canDelete =
+            contextSrv.hasPermissionInMetadata(AccessControlAction.ActionTeamsDelete, original) &&
+            (!scimGroupSyncEnabled || !original.isProvisioned);
           return (
-            <Stack direction="row" justifyContent="flex-end">
+            <Stack direction="row" justifyContent="flex-end" gap={2}>
               {canReadTeam && (
-                <Tooltip content={'Edit team'}>
-                  <a href={`org/teams/edit/${original.id}`} aria-label={`Edit team ${original.name}`}>
-                    <Icon name={'pen'} />
-                  </a>
-                </Tooltip>
+                <LinkButton
+                  href={`org/teams/edit/${original.uid}`}
+                  aria-label={t('teams.team-list.columns.aria-label-edit-team', 'Edit team {{teamName}}', {
+                    teamName: original.name,
+                  })}
+                  icon="pen"
+                  size="sm"
+                  variant="secondary"
+                  tooltip={t('teams.team-list.columns.tooltip-edit-team', 'Edit team')}
+                />
               )}
               <DeleteButton
-                aria-label={`Delete team ${original.name}`}
+                aria-label={t('teams.team-list.columns.aria-label-delete-button', 'Delete team {{teamName}}', {
+                  teamName: original.name,
+                })}
                 size="sm"
                 disabled={!canDelete}
-                onConfirm={() => deleteTeam(original.id)}
+                onConfirm={() => deleteTeam(original.uid)}
               />
             </Stack>
           );
         },
       },
     ],
-    [displayRolePicker, hasFetched, rolesLoading, roleOptions, deleteTeam, styles]
+    [displayRolePicker, hasFetched, rolesLoading, roleOptions, deleteTeam, styles, scimGroupSyncEnabled]
   );
 
   return (
     <Page
       navId="teams"
       actions={
-        <LinkButton href={canCreate ? 'org/teams/new' : '#'} disabled={!canCreate}>
-          New Team
-        </LinkButton>
+        !noTeams ? (
+          <LinkButton href={canCreate ? 'org/teams/new' : '#'} disabled={!canCreate}>
+            <Trans i18nKey="teams.team-list.new-team">New Team</Trans>
+          </LinkButton>
+        ) : undefined
       }
     >
       <Page.Contents>
         {noTeams ? (
-          <EmptyListCTA
-            title="You haven't created any teams yet."
-            buttonIcon="users-alt"
-            buttonLink="org/teams/new"
-            buttonTitle=" New team"
-            buttonDisabled={!contextSrv.hasPermission(AccessControlAction.ActionTeamsCreate)}
-            proTip="Assign folder and dashboard permissions to teams instead of users to ease administration."
-            proTipLink=""
-            proTipLinkTitle=""
-            proTipTarget="_blank"
-          />
+          <EmptyState
+            variant="call-to-action"
+            button={
+              <LinkButton disabled={!canCreate} href="org/teams/new" icon="users-alt" size="lg">
+                <Trans i18nKey="teams.empty-state.button-title">New team</Trans>
+              </LinkButton>
+            }
+            message={t('teams.empty-state.title', "You haven't created any teams yet")}
+          >
+            <Trans i18nKey="teams.empty-state.pro-tip">
+              Assign folder and dashboard permissions to teams instead of users to ease administration.{' '}
+              <TextLink external href="https://grafana.com/docs/grafana/latest/administration/team-management">
+                Learn more
+              </TextLink>
+            </Trans>
+          </EmptyState>
         ) : (
           <>
             <div className="page-action-bar">
               <InlineField grow>
-                <FilterInput placeholder="Search teams" value={query} onChange={changeQuery} />
+                <FilterInput
+                  placeholder={t('teams.team-list.placeholder-search-teams', 'Search teams')}
+                  value={query}
+                  onChange={changeQuery}
+                />
               </InlineField>
             </div>
-            <Stack direction={'column'} gap={2}>
-              <InteractiveTable
-                columns={columns}
-                data={hasFetched ? teams : skeletonData}
-                getRowId={(team) => String(team.id)}
-                fetchData={changeSort}
-              />
-              <Stack justifyContent="flex-end">
-                <Pagination hideWhenSinglePage currentPage={page} numberOfPages={totalPages} onNavigate={changePage} />
+            {hasFetched && teams.length === 0 ? (
+              <EmptyState variant="not-found" message={t('teams.empty-state.message', 'No teams found')} />
+            ) : (
+              <Stack direction={'column'} gap={2}>
+                <InteractiveTable
+                  columns={columns}
+                  data={hasFetched ? teams : skeletonData}
+                  getRowId={(team) => String(team.id)}
+                  fetchData={changeSort}
+                />
+                <Stack justifyContent="flex-end">
+                  <Pagination
+                    hideWhenSinglePage
+                    currentPage={page}
+                    numberOfPages={totalPages}
+                    onNavigate={changePage}
+                  />
+                </Stack>
               </Stack>
-            </Stack>
+            )}
           </>
         )}
+        {!query && <EnterpriseAuthFeaturesCard page="teams" />}
       </Page.Contents>
     </Page>
   );

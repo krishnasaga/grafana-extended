@@ -4,35 +4,56 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	claims "github.com/grafana/authlib/types"
 	"github.com/grafana/grafana/pkg/api/dtos"
 	"github.com/grafana/grafana/pkg/api/webassets"
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/middleware"
 	ac "github.com/grafana/grafana/pkg/services/accesscontrol"
-	"github.com/grafana/grafana/pkg/services/auth/identity"
 	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
 	"github.com/grafana/grafana/pkg/services/dashboards"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/login"
 	"github.com/grafana/grafana/pkg/services/org"
 	pref "github.com/grafana/grafana/pkg/services/preference"
-	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/setting"
 )
 
+type URLPrefs struct {
+	Language       string
+	RegionalFormat string
+	Theme          string
+}
+
+// URL prefs take precedence over any saved user preferences
+func getURLPrefs(c *contextmodel.ReqContext) URLPrefs {
+	language := c.Query("lang")
+	theme := c.Query("theme")
+	regionalFormat := c.Query("regionalFormat")
+
+	return URLPrefs{
+		Language:       language,
+		RegionalFormat: regionalFormat,
+		Theme:          theme,
+	}
+}
+
 func (hs *HTTPServer) setIndexViewData(c *contextmodel.ReqContext) (*dtos.IndexViewData, error) {
+	c, span := hs.injectSpan(c, "api.setIndexViewData")
+	defer span.End()
+
 	settings, err := hs.getFrontendSettings(c)
 	if err != nil {
 		return nil, err
 	}
 
-	userID, _ := identity.UserIdentifier(c.SignedInUser.GetNamespacedID())
+	userID, _ := identity.UserIdentifier(c.GetID())
 
-	prefsQuery := pref.GetPreferenceWithDefaultsQuery{UserID: userID, OrgID: c.SignedInUser.GetOrgID(), Teams: c.Teams}
+	prefsQuery := pref.GetPreferenceWithDefaultsQuery{UserID: userID, OrgID: c.GetOrgID(), Teams: c.Teams}
 	prefs, err := hs.preferenceService.GetWithDefaults(c.Req.Context(), &prefsQuery)
 	if err != nil {
 		return nil, err
@@ -48,16 +69,49 @@ func (hs *HTTPServer) setIndexViewData(c *contextmodel.ReqContext) (*dtos.IndexV
 	// Locale is used for some number and date/time formatting, whereas language is used just for
 	// translating words in the interface
 	acceptLangHeader := c.Req.Header.Get("Accept-Language")
-	locale := "en-US"
-	language := "" // frontend will set the default language
-
-	if prefs.JSONData.Language != "" {
-		language = prefs.JSONData.Language
-	}
+	acceptLangHeaderFirstValue := ""
 
 	if len(acceptLangHeader) > 0 {
 		parts := strings.Split(acceptLangHeader, ",")
-		locale = parts[0]
+		acceptLangHeaderFirstValue = parts[0]
+	}
+
+	locale := "en-US" // default to en formatting, but use the accept-lang header or user's preference
+	if acceptLangHeaderFirstValue != "" {
+		locale = acceptLangHeaderFirstValue
+	}
+
+	language := "" // frontend will set the default language
+	urlPrefs := getURLPrefs(c)
+
+	if urlPrefs.Language != "" {
+		language = urlPrefs.Language
+	} else if prefs.JSONData.Language != "" {
+		language = prefs.JSONData.Language
+	}
+
+	var regionalFormat string
+	if hs.Features.IsEnabled(c.Req.Context(), featuremgmt.FlagLocaleFormatPreference) {
+		regionalFormat = "en"
+
+		// We default the regional format (locale) to the Accept-Language header rather than the language preference
+		// mainly because we want to avoid defaulting to en-US for most users who have not set a preference, and we
+		// don't have more specific English language preferences yet.
+
+		// Regional format preference order (from most-preferred to least):
+		// 1. URL parameter
+		// 2. regionalFormat User preference
+		// 3. Accept-Language header
+		// 4. Language preference
+		if urlPrefs.RegionalFormat != "" {
+			regionalFormat = urlPrefs.RegionalFormat
+		} else if prefs.JSONData.RegionalFormat != "" {
+			regionalFormat = prefs.JSONData.RegionalFormat
+		} else if acceptLangHeaderFirstValue != "" {
+			regionalFormat = acceptLangHeaderFirstValue
+		} else if language != "" {
+			regionalFormat = language
+		}
 	}
 
 	appURL := hs.Cfg.AppURL
@@ -80,7 +134,7 @@ func (hs *HTTPServer) setIndexViewData(c *contextmodel.ReqContext) (*dtos.IndexV
 		weekStart = *prefs.WeekStart
 	}
 
-	theme := hs.getThemeForIndexData(prefs.Theme, c.Query("theme"))
+	theme := hs.getThemeForIndexData(prefs.Theme, urlPrefs.Theme)
 	assets, err := webassets.GetWebAssets(c.Req.Context(), hs.Cfg, hs.License)
 	if err != nil {
 		return nil, err
@@ -95,24 +149,25 @@ func (hs *HTTPServer) setIndexViewData(c *contextmodel.ReqContext) (*dtos.IndexV
 			UID:                        c.UserUID, // << not set yet
 			IsSignedIn:                 c.IsSignedIn,
 			Login:                      c.Login,
-			Email:                      c.SignedInUser.GetEmail(),
+			Email:                      c.GetEmail(),
 			Name:                       c.Name,
-			OrgId:                      c.SignedInUser.GetOrgID(),
+			OrgId:                      c.GetOrgID(),
 			OrgName:                    c.OrgName,
-			OrgRole:                    c.SignedInUser.GetOrgRole(),
+			OrgRole:                    c.GetOrgRole(),
 			OrgCount:                   hs.getUserOrgCount(c, userID),
-			GravatarUrl:                dtos.GetGravatarUrl(hs.Cfg, c.SignedInUser.GetEmail()),
+			GravatarUrl:                dtos.GetGravatarUrl(hs.Cfg, c.GetEmail()),
 			IsGrafanaAdmin:             c.IsGrafanaAdmin,
 			Theme:                      theme.ID,
 			LightTheme:                 theme.Type == "light",
 			Timezone:                   prefs.Timezone,
 			WeekStart:                  weekStart,
-			Locale:                     locale,
+			Locale:                     locale, // << will be removed in favor of RegionalFormat
+			RegionalFormat:             regionalFormat,
 			Language:                   language,
 			HelpFlags1:                 c.HelpFlags1,
 			HasEditPermissionInFolders: hasEditPerm,
 			Analytics:                  hs.buildUserAnalyticsSettings(c),
-			AuthenticatedBy:            hs.getUserAuthenticatedBy(c, userID),
+			AuthenticatedBy:            c.GetAuthenticatedBy(),
 		},
 		Settings:                            settings,
 		ThemeType:                           theme.Type,
@@ -160,17 +215,16 @@ func (hs *HTTPServer) setIndexViewData(c *contextmodel.ReqContext) (*dtos.IndexV
 
 	hs.HooksService.RunIndexDataHooks(&data, c)
 
-	data.NavTree.ApplyAdminIA()
+	data.NavTree.ApplyCostManagementIA()
+	data.NavTree.ApplyHelpVersion(data.Settings.BuildInfo.VersionString) // RunIndexDataHooks can modify the version string
 	data.NavTree.Sort()
 
 	return &data, nil
 }
 
 func (hs *HTTPServer) buildUserAnalyticsSettings(c *contextmodel.ReqContext) dtos.AnalyticsSettings {
-	namespace, id := c.SignedInUser.GetNamespacedID()
-
 	// Anonymous users do not have an email or auth info
-	if namespace != identity.NamespaceUser {
+	if !c.IsIdentityType(claims.TypeUser) {
 		return dtos.AnalyticsSettings{Identifier: "@" + hs.Cfg.AppURL}
 	}
 
@@ -178,21 +232,10 @@ func (hs *HTTPServer) buildUserAnalyticsSettings(c *contextmodel.ReqContext) dto
 		return dtos.AnalyticsSettings{}
 	}
 
-	userID, err := identity.IntIdentifier(namespace, id)
-	if err != nil {
-		hs.log.Error("Failed to parse user ID", "error", err)
-		return dtos.AnalyticsSettings{Identifier: "@" + hs.Cfg.AppURL}
-	}
+	identifier := c.GetEmail() + "@" + hs.Cfg.AppURL
 
-	identifier := c.SignedInUser.GetEmail() + "@" + hs.Cfg.AppURL
-
-	authInfo, err := hs.authInfoService.GetAuthInfo(c.Req.Context(), &login.GetAuthInfoQuery{UserId: userID})
-	if err != nil && !errors.Is(err, user.ErrUserNotFound) {
-		hs.log.Error("Failed to get auth info for analytics", "error", err)
-	}
-
-	if authInfo != nil && authInfo.AuthModule == login.GrafanaComAuthModule {
-		identifier = authInfo.AuthId
+	if authenticatedBy := c.GetAuthenticatedBy(); authenticatedBy == login.GrafanaComAuthModule {
+		identifier = c.GetAuthID()
 	}
 
 	return dtos.AnalyticsSettings{
@@ -215,32 +258,6 @@ func (hs *HTTPServer) getUserOrgCount(c *contextmodel.ReqContext, userID int64) 
 	return len(userOrgs)
 }
 
-// getUserAuthenticatedBy returns external authentication method used for user.
-// If user does not have an external authentication method an empty string is returned
-func (hs *HTTPServer) getUserAuthenticatedBy(c *contextmodel.ReqContext, userID int64) string {
-	if userID == 0 {
-		return ""
-	}
-
-	// Special case for image renderer. Frontend relies on this information
-	// to render dashboards in a bit different way.
-	if c.IsRenderCall {
-		return login.RenderModule
-	}
-
-	info, err := hs.authInfoService.GetAuthInfo(c.Req.Context(), &login.GetAuthInfoQuery{UserId: userID})
-	// we ignore errors where a user does not have external user auth
-	if err != nil && !errors.Is(err, user.ErrUserNotFound) {
-		hs.log.FromContext(c.Req.Context()).Error("Failed to fetch auth info", "userId", c.SignedInUser.UserID, "error", err)
-	}
-
-	if err != nil {
-		return ""
-	}
-
-	return info.AuthModule
-}
-
 func hashUserIdentifier(identifier string, secret string) string {
 	if secret == "" {
 		return ""
@@ -253,6 +270,9 @@ func hashUserIdentifier(identifier string, secret string) string {
 }
 
 func (hs *HTTPServer) Index(c *contextmodel.ReqContext) {
+	c, span := hs.injectSpan(c, "api.Index")
+	defer span.End()
+
 	data, err := hs.setIndexViewData(c)
 	if err != nil {
 		c.Handle(hs.Cfg, http.StatusInternalServerError, "Failed to get settings", err)
@@ -283,7 +303,8 @@ func (hs *HTTPServer) getThemeForIndexData(themePrefId string, themeURLParam str
 
 	if pref.IsValidThemeID(themePrefId) {
 		theme := pref.GetThemeByID(themePrefId)
-		if !theme.IsExtra || hs.Features.IsEnabledGlobally(featuremgmt.FlagExtraThemes) {
+		// TODO refactor
+		if !theme.IsExtra || hs.Features.IsEnabledGlobally(featuremgmt.FlagGrafanaconThemes) {
 			return theme
 		}
 	}

@@ -1,11 +1,25 @@
 import { configureStore as reduxConfigureStore, createListenerMiddleware } from '@reduxjs/toolkit';
 import { setupListeners } from '@reduxjs/toolkit/query';
+import { Middleware } from 'redux';
 
-import { migrateToCloudAPI } from 'app/features/admin/migrate-to-cloud/api';
+import { alertingAPI as alertingPackageAPI } from '@grafana/alerting/unstable';
+import { dashboardAPIv0alpha1 } from 'app/api/clients/dashboard/v0alpha1';
+import { preferencesAPIv1alpha1 } from 'app/api/clients/preferences/v1alpha1';
+import { rulesAPIv0alpha1 } from 'app/api/clients/rules/v0alpha1';
+import { shortURLAPIv1alpha1 } from 'app/api/clients/shorturl/v1alpha1';
 import { browseDashboardsAPI } from 'app/features/browse-dashboards/api/browseDashboardsAPI';
 import { publicDashboardApi } from 'app/features/dashboard/api/publicDashboardApi';
+import { cloudMigrationAPI } from 'app/features/migrate-to-cloud/api';
+import { userPreferencesAPI } from 'app/features/preferences/api';
 import { StoreState } from 'app/types/store';
 
+import { advisorAPIv0alpha1 } from '../api/clients/advisor/v0alpha1';
+import { folderAPIv1beta1 } from '../api/clients/folder/v1beta1';
+import { iamAPIv0alpha1 } from '../api/clients/iam/v0alpha1';
+import { playlistAPIv0alpha1 } from '../api/clients/playlist/v0alpha1';
+import { provisioningAPIv0alpha1 } from '../api/clients/provisioning/v0alpha1';
+// Used by the API client generator
+// PLOP_INJECT_IMPORT
 import { buildInitialState } from '../core/reducers/navModel';
 import { addReducer, createRootReducer } from '../core/reducers/root';
 import { alertingApi } from '../features/alerting/unified/api/alertingApi';
@@ -20,6 +34,11 @@ export function addRootReducer(reducers: any) {
 }
 
 const listenerMiddleware = createListenerMiddleware();
+const extraMiddleware: Middleware[] = [];
+
+export function addExtraMiddleware(middleware: Middleware) {
+  extraMiddleware.push(middleware);
+}
 
 export function configureStore(initialState?: Partial<StoreState>) {
   const store = reduxConfigureStore({
@@ -28,9 +47,23 @@ export function configureStore(initialState?: Partial<StoreState>) {
       getDefaultMiddleware({ thunk: true, serializableCheck: false, immutableCheck: false }).concat(
         listenerMiddleware.middleware,
         alertingApi.middleware,
+        alertingPackageAPI.middleware,
         publicDashboardApi.middleware,
         browseDashboardsAPI.middleware,
-        migrateToCloudAPI.middleware
+        cloudMigrationAPI.middleware,
+        userPreferencesAPI.middleware,
+        iamAPIv0alpha1.middleware,
+        playlistAPIv0alpha1.middleware,
+        provisioningAPIv0alpha1.middleware,
+        folderAPIv1beta1.middleware,
+        advisorAPIv0alpha1.middleware,
+        dashboardAPIv0alpha1.middleware,
+        rulesAPIv0alpha1.middleware,
+        shortURLAPIv1alpha1.middleware,
+        preferencesAPIv1alpha1.middleware,
+        // PLOP_INJECT_MIDDLEWARE
+        // Used by the API client generator
+        ...extraMiddleware
       ),
     devTools: process.env.NODE_ENV !== 'production',
     preloadedState: {
@@ -48,41 +81,3 @@ export function configureStore(initialState?: Partial<StoreState>) {
 
 export type RootState = ReturnType<ReturnType<typeof configureStore>['getState']>;
 export type AppDispatch = ReturnType<typeof configureStore>['dispatch'];
-
-/*
-function getActionsToIgnoreSerializableCheckOn() {
-  return [
-    'dashboard/setPanelAngularComponent',
-    'dashboard/panelModelAndPluginReady',
-    'dashboard/dashboardInitCompleted',
-    'plugins/panelPluginLoaded',
-    'explore/initializeExplore',
-    'explore/changeRange',
-    'explore/updateDatasourceInstance',
-    'explore/queryStoreSubscription',
-    'explore/queryStreamUpdated',
-  ];
-}
-
-function getPathsToIgnoreMutationAndSerializableCheckOn() {
-  return [
-    'plugins.panels',
-    'dashboard.panels',
-    'dashboard.getModel',
-    'payload.plugin',
-    'panelEditorNew.getPanel',
-    'panelEditorNew.getSourcePanel',
-    'panelEditorNew.getData',
-    'explore.left.queryResponse',
-    'explore.right.queryResponse',
-    'explore.left.datasourceInstance',
-    'explore.right.datasourceInstance',
-    'explore.left.range',
-    'explore.left.eventBridge',
-    'explore.right.eventBridge',
-    'explore.right.range',
-    'explore.left.querySubscription',
-    'explore.right.querySubscription',
-  ];
-}
-*/
